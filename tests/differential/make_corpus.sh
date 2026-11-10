@@ -1,10 +1,11 @@
 #!/bin/bash
-# Rebuilds the position corpus and its golden files from the pinned Lichess
-# database dumps: downloads them, checks their checksums, extracts the positions,
-# dumps them with the engine and refreshes the small sample kept in git.
+# Rebuilds the corpora and their golden files from the pinned Lichess database
+# dumps: downloads them, checks their checksums, extracts the positions and the
+# lines of play, dumps them with the engine and refreshes the small samples kept
+# in git.
 #
 # The dumps are never decompressed to disk. The bulk data goes to
-# tests/differential/data (not in git, about 200 MB). It takes a few minutes.
+# tests/differential/data (not in git, about 240 MB). It takes about 10 minutes.
 #
 # The corpus and the golden files built are compared with the checksums recorded
 # in CONTENT.sha256. If they differ the script fails and leaves the sample alone,
@@ -24,9 +25,11 @@ export EXE=${EXE:-$DIR/../../src/stockfish}
 UPDATE=no
 [ "${1:-}" = "--update" ] && UPDATE=yes
 
-# Number of positions of each set kept in the sample
+# Number of positions, and of lines of play, of each set kept in the sample
 SAMPLE_STANDARD=4000
 SAMPLE_CHESS960=1000
+SAMPLE_LINES_STANDARD=100
+SAMPLE_LINES_CHESS960=50
 
 if [ ! -x "$EXE" ]; then
    echo "No engine at $EXE, build it first (cd src && make -j2 build) or set EXE."
@@ -62,8 +65,23 @@ build_set()
 build_set standard lichess_db_standard_rated_2013-01.pgn.zst
 build_set chess960 lichess_db_chess960_rated_2014-01.pgn.zst --chess960
 
+# The lines of play are written as extracted, they need no canonical form
+build_lines()
+{
+  name=$1 dump=$2
+  shift 2
+
+  zstd -dc "$DATA/downloads/$dump" | "$PYTHON" "$DIR/extract_positions.py" --lines "$@" \
+     | zstd -q -19 > "$DATA/$name.lines.zst"
+  "$PYTHON" "$DIR/differential.py" --lines "$@" generate "$DATA/$name.lines.zst" "$DATA/$name.lines.jsonl.zst"
+}
+
+build_lines standard lichess_db_standard_rated_2013-01.pgn.zst
+build_lines chess960 lichess_db_chess960_rated_2014-01.pgn.zst --chess960
+
 # 3. Compare what was built with what is recorded in git
-for f in standard.fen standard.jsonl chess960.fen chess960.jsonl; do
+for f in standard.fen standard.jsonl chess960.fen chess960.jsonl \
+         standard.lines standard.lines.jsonl chess960.lines chess960.lines.jsonl; do
    echo "$(zstd -dc "$DATA/$f.zst" | sha256sum | cut -d' ' -f1)  $f"
 done > "$DATA/CONTENT.sha256"
 
@@ -87,5 +105,13 @@ sample_set()
 }
 sample_set standard $SAMPLE_STANDARD
 sample_set chess960 $SAMPLE_CHESS960
+
+sample_lines()
+{
+  "$PYTHON" "$DIR/differential.py" --lines sample "$DATA/$1.lines.zst" "$DATA/$1.lines.jsonl.zst" "$2" \
+     "$DIR/sample/$1.lines.gz" "$DIR/sample/$1.lines.jsonl.gz"
+}
+sample_lines standard $SAMPLE_LINES_STANDARD
+sample_lines chess960 $SAMPLE_LINES_CHESS960
 
 du -sh --apparent-size "$DATA"

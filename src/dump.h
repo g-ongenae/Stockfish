@@ -60,6 +60,46 @@ class PositionDumper {
     std::unique_ptr<Tables>    tables;
 };
 
+// LineDumper backs the 'dumpline' debug command. Where PositionDumper sets
+// every position up from scratch, it sets up the start position of a line of
+// play once, and then makes the moves of the line on that same position with
+// do_move(), driving the NNUE accumulator stack and refresh cache the way the
+// search does. It prints one line of JSON per position of the line, with the
+// state reached incrementally: hash keys, rule50 and repetition bookkeeping, the
+// evaluation, and the effect of a null move and of a probe move on the side, both
+// undone before the line goes on. A last line walks back down the line with
+// undo_move(). See tests/differential/README.md for the format.
+class LineDumper {
+   public:
+    explicit LineDumper(const Eval::NNUE::Network& network);
+    ~LineDumper();
+
+    LineDumper(const LineDumper&)            = delete;
+    LineDumper& operator=(const LineDumper&) = delete;
+
+    // Appends the dump of a line, given as the arguments of the UCI 'position'
+    // command ("startpos moves e2e4 ..." or "fen <fen> moves ..."), to 'out':
+    // one line per position of the line, then the walk back, each line followed
+    // by a newline. A line that cannot be set up or played yields a single
+    // object with an "error" member, and nothing else.
+    void dump(const std::string& line, bool isChess960, std::string& out);
+
+    // The accumulator stack is reset every Window plies, as at the root of
+    // each search of a game; the refresh cache is only cleared between lines.
+    static constexpr int Window = 64;
+
+    // Whether the position at a given ply of the line is skipped: neither
+    // evaluated nor probed, so that the accumulator updates of several moves
+    // are chained, as when search does not evaluate a node.
+    static constexpr bool skipped(int ply) { return ply % 8 == 3 || ply % 8 >= 6; }
+
+   private:
+    struct Tables;
+
+    const Eval::NNUE::Network& network;
+    std::unique_ptr<Tables>    tables;
+};
+
 }  // namespace Stockfish
 
 #endif  // #ifndef DUMP_H_INCLUDED

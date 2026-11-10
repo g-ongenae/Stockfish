@@ -892,6 +892,194 @@ class TestDumpFile(metaclass=OrderedClassMembers):
         assert "CRITICAL ERROR" in self.stockfish.process.stdout
 
 
+class TestDumpLine(metaclass=OrderedClassMembers):
+    def beforeAll(self):
+        self.stockfish = Stockfish()
+
+    def afterAll(self):
+        self.stockfish.quit()
+        assert self.stockfish.close() == 0
+
+    def afterEach(self):
+        assert postfix_check(self.stockfish.get_output()) == True
+        self.stockfish.clear_output()
+
+    def _next_dump_line(self):
+        for line in self.stockfish.readline():
+            if line.startswith("{"):
+                return line
+
+    def _dump(self, position):
+        self.stockfish.send_command(f"position {position}")
+        self.stockfish.send_command("dump")
+        return json.loads(self._next_dump_line())
+
+    def _dump_line(self, line):
+        # one record per position of the line, then the walk back
+        self.stockfish.send_command(f"dumpline {line}")
+        records = [json.loads(self._next_dump_line())]
+        if "error" in records[0]:
+            return records
+        while "undo" not in records[-1]:
+            records.append(json.loads(self._next_dump_line()))
+        return records
+
+    def test_line_matches_positions(self):
+        line = "startpos moves e2e4 d7d5 e4d5 g8f6 f1b5 c7c6 d5c6 d8a5 c6b7 a5b5 b7a8n"
+        moves = line.split()[2:]
+        records = self._dump_line(line)
+
+        assert len(records) == len(moves) + 2
+        for ply, record in enumerate(records[:-1]):
+            assert record["ply"] == ply
+            assert record["move"] == (moves[ply - 1] if ply else None)
+            # what the moves maintain is what a fresh set up computes
+            dump = self._dump(f"startpos moves {' '.join(moves[:ply])}")
+            for member in ("fen", "key", "pawn_key", "material_key", "minor_piece_key",
+                           "non_pawn_key", "non_pawn_material", "checkers"):
+                assert record[member] == dump[member]
+            if record["nnue"] is not None:
+                assert (record["nnue"], record["eval"]) == (dump["nnue"], dump["eval"])
+            if record["probe"] is not None:
+                index = dump["moves"].index(record["probe"]["move"])
+                assert record["probe"]["key"] == dump["key_after"][index]
+
+        # plies 3, 6 and 7 of every 8 are not evaluated, nor probed
+        assert [r["nnue"] is None for r in records[:-1]] == [
+            p % 8 in (3, 6, 7) or r["checkers"] != "0" * 16 for p, r in enumerate(records[:-1])
+        ]
+        assert records[3]["captured"] == "p" and records[11]["captured"] == "r"
+        assert records[11]["material_key"] != records[10]["material_key"]
+
+    def test_walk_back(self):
+        records = self._dump_line("startpos moves g1f3 d7d5 g2g3 c8g4 f1g2 b8c6 e1g1")
+        undo = records[-1]
+
+        assert undo["undo"] == 7
+        # back down the line, the keys are those of the way up
+        assert undo["keys"] == [r["key"] for r in reversed(records[:-2])]
+        assert undo["fen"] == records[0]["fen"] and undo["key"] == records[0]["key"]
+        # every position of the search window is evaluated on the way back
+        assert all(v is not None for v in undo["nnues"])
+        for record, nnue in zip(reversed(records[:-2]), undo["nnues"]):
+            assert record["nnue"] in (None, nnue)
+
+    def test_null_move(self):
+        records = self._dump_line("startpos moves e2e4 c7c5 g1f3")
+
+        null = records[1]["null"]
+        assert null["fen"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"
+        dump = self._dump(f"fen {null['fen']}")
+        assert (null["key"], null["nnue"]) == (dump["key"], dump["nnue"])
+        assert records[2]["plies_from_null"] == 2
+
+    def test_repetition(self):
+        records = self._dump_line("startpos moves g1f3 g8f6 f3g1 f6g8 g1f3 g8f6 f3g1 f6g8")
+
+        assert [r["repetition"] for r in records[:-1]] == [0, 0, 0, 0, 4, 4, 4, 4, -4]
+        assert [r["has_repeated"] for r in records[:-1]] == [False] * 4 + [True] * 5
+        # a repetition draws when it lies strictly after the root, here ply 0
+        assert [r["is_draw"] for r in records[:-1]] == [False] * 5 + [True] * 4
+        assert [r["upcoming_repetition"] for r in records[:-1]] == [False] * 4 + [True] * 5
+
+    def test_fifty_moves(self):
+        records = self._dump_line("fen 8/8/8/4k3/8/8/8/R3K3 w - - 98 80 moves a1a2 e5e4 a2a3")
+
+        assert [r["fen"].split()[4] for r in records[:-1]] == ["98", "99", "100", "101"]
+        assert [r["is_draw"] for r in records[:-1]] == [False, False, True, True]
+        # the key changes every 8 plies of rule50 from 14 on
+        assert records[0]["key"] != self._dump("fen 8/8/8/4k3/8/8/8/R3K3 w - - 0 80")["key"]
+
+    def test_chess960(self):
+        self.stockfish.send_command("setoption name UCI_Chess960 value true")
+        records = self._dump_line(
+            "fen bnrqkr2/ppppppbp/5np1/8/8/5NP1/PPPPPPBP/BNRQKR2 w FCfc - 2 4 moves e1f1 e8f8"
+        )
+        self.stockfish.send_command("setoption name UCI_Chess960 value false")
+
+        assert records[1]["fen"] == "bnrqkr2/ppppppbp/5np1/8/8/5NP1/PPPPPPBP/BNRQ1RK1 b fc - 3 4"
+        assert records[2]["fen"] == "bnrq1rk1/ppppppbp/5np1/8/8/5NP1/PPPPPPBP/BNRQ1RK1 w - - 4 5"
+
+    def test_errors(self):
+        for line, error in (
+            ("startpos moves e2e4 e7e5 e4e5", "Illegal move e4e5 at ply 3"),
+            ("startpos e2e4", "Malformed line, expected startpos or fen, then moves"),
+            ("", "Malformed line, expected startpos or fen, then moves"),
+        ):
+            records = self._dump_line(line)
+            assert records == [{"error": error, "input": line}]
+
+        # an invalid FEN, and the next line is still dumped
+        assert "error" in self._dump_line("fen not a valid fen moves e2e4")[0]
+        records = self._dump_line("startpos")
+        assert len(records) == 2 and records[1]["undo"] == 0
+
+    def _check_sample(self, name, count):
+        # compare with the golden files, see tests/differential
+        sample = PATH / "differential" / "sample"
+        with gzip.open(sample / f"{name}.lines.gz", "rt") as f:
+            lines = f.readlines()[:count]
+        assert len(lines) == count
+        expected = []
+        with gzip.open(sample / f"{name}.lines.jsonl.gz", "rt") as f:
+            # the records of the first lines, each ending with its walk back
+            for record in f:
+                expected.append(record.strip())
+                if record.startswith('{"undo"'):
+                    count -= 1
+                    if count == 0:
+                        break
+        with open(f"{name}.lines", "w") as f:
+            f.writelines(lines)
+
+        self.stockfish.send_command(f"dumpline {name}.lines")
+        for record in expected:
+            assert self._next_dump_line() == record
+
+    def test_golden_sample(self):
+        self._check_sample("standard", 10)
+
+    def test_golden_sample_chess960(self):
+        self.stockfish.send_command("setoption name UCI_Chess960 value true")
+        self._check_sample("chess960", 5)
+        self.stockfish.send_command("setoption name UCI_Chess960 value false")
+
+
+class TestDumpLineFile(metaclass=OrderedClassMembers):
+    def beforeEach(self):
+        self.stockfish = None
+
+    def afterEach(self):
+        assert postfix_check(self.stockfish.get_output()) == True
+        self.stockfish.clear_output()
+
+    def _dump(self, name, content):
+        with open(name, "w") as f:
+            f.write(content)
+        self.stockfish = Stockfish(f"dumpline {name}".split(" "), True)
+        return [json.loads(l) for l in self.stockfish.process.stdout.splitlines() if l.startswith("{")]
+
+    def test_valid_file(self):
+        records = self._dump("good.lines", "startpos moves e2e4\n\nstartpos\n")
+        assert self.stockfish.process.returncode == 0
+        assert [("ply" in r, "undo" in r) for r in records] == [
+            (True, False), (True, False), (False, True), (True, False), (False, True)
+        ]
+
+    def test_malformed_lines(self):
+        # a line that cannot be played is reported, the next ones are still dumped
+        records = self._dump("bad.lines", "startpos moves e2e5\nnonsense\nstartpos moves e2e4\n")
+        assert self.stockfish.process.returncode == 0
+        assert records[0] == {"error": "Illegal move e2e5 at ply 1", "input": "startpos moves e2e5"}
+        assert records[1]["error"].startswith("Malformed line") and records[1]["input"] == "nonsense"
+        assert records[2]["ply"] == 0 and records[-1]["undo"] == 1
+
+    def test_missing_file(self):
+        self.stockfish = Stockfish("dumpline does_not_exist.lines".split(" "), True, expect_failure=True)
+        assert self.stockfish.process.returncode != 0
+        assert "CRITICAL ERROR" in self.stockfish.process.stdout
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Stockfish with testing options")
     parser.add_argument("--valgrind", action="store_true", help="Run valgrind testing")
@@ -935,6 +1123,8 @@ if __name__ == "__main__":
             TestBenchFile,
             TestDump,
             TestDumpFile,
+            TestDumpLine,
+            TestDumpLineFile,
         ]
     )
 

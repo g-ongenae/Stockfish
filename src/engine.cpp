@@ -349,6 +349,45 @@ bool Engine::dump_positions(const std::filesystem::path& fenFile) const {
     return true;
 }
 
+void Engine::dump_line(const std::string& line) const {
+    verify_network();
+
+    LineDumper  dumper(*network);
+    std::string out;
+
+    dumper.dump(line, options["UCI_Chess960"], out);
+    sync_cout_start();
+    std::cout << out << std::flush;
+    sync_cout_end();
+}
+
+bool Engine::dump_lines(const std::filesystem::path& lineFile) const {
+    std::ifstream file(lineFile);
+
+    if (!file.is_open())
+        return false;
+
+    verify_network();
+
+    LineDumper  dumper(*network);
+    const bool  isChess960 = options["UCI_Chess960"];
+    std::string line, out;
+
+    // The lines are streamed, there can be far too many to hold in memory
+    sync_cout_start();
+    while (getline(file, line))
+        if (!is_whitespace(line))
+        {
+            out.clear();
+            dumper.dump(line, isChess960, out);
+            std::cout << out;
+        }
+    std::cout << std::flush;
+    sync_cout_end();
+
+    return true;
+}
+
 const OptionsMap& Engine::get_options() const { return options; }
 OptionsMap&       Engine::get_options() { return options; }
 
