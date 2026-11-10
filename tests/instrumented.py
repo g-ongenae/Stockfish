@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import json
 import re
 import sys
@@ -829,6 +830,28 @@ class TestDump(metaclass=OrderedClassMembers):
         assert dump["fen"] == "bnrqkr2/ppppppbp/5np1/8/8/5NP1/PPPPPPBP/BNRQKR2 w FCfc - 2 4"
         # castling is the king taking its own rook
         assert dump["moves"][-1] == "e1f1"
+
+    def _check_sample(self, name, count):
+        # compare with the golden files, see tests/differential
+        sample = PATH / "differential" / "sample"
+        with gzip.open(sample / f"{name}.fen.gz", "rt") as f:
+            fens = f.readlines()[:count]
+        with gzip.open(sample / f"{name}.jsonl.gz", "rt") as f:
+            golden = f.readlines()[:count]
+        with open(f"{name}.fen", "w") as f:
+            f.writelines(fens)
+
+        self.stockfish.send_command(f"dump {name}.fen")
+        for expected in golden:
+            assert self._next_dump_line() == expected.strip()
+
+    def test_golden_sample(self):
+        self._check_sample("standard", 500)
+
+    def test_golden_sample_chess960(self):
+        self.stockfish.send_command("setoption name UCI_Chess960 value true")
+        self._check_sample("chess960", 250)
+        self.stockfish.send_command("setoption name UCI_Chess960 value false")
 
 
 class TestDumpFile(metaclass=OrderedClassMembers):
