@@ -40,25 +40,59 @@ pub fn move_to_string(m: Move, chess960: bool) -> String {
 }
 
 /// `UCIEngine::to_move()`: the legal move with this UCI notation, or none.
-pub fn to_move(pos: &Position, s: &str) -> Move {
+pub fn to_move(pos: &Position, s: &[u8]) -> Move {
     let s = s.to_ascii_lowercase();
     for &m in &MoveList::legal(pos) {
-        if s == move_to_string(m, pos.is_chess960()) {
+        if s == move_to_string(m, pos.is_chess960()).as_bytes() {
             return m;
         }
     }
     Move::none()
 }
 
-fn is_c_space(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\x0B' | '\x0C' | '\r')
+fn is_c_space(c: u8) -> bool {
+    matches!(c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r')
+}
+
+/// `is >> n` for an int, applied to the start of a token: an optional sign
+/// and the longest run of digits. Returns the value and the rest of the token,
+/// which the stream would read as the next token, or None if C++ would fail
+/// (no digits, or out of the range of int).
+fn parse_int_prefix(t: &[u8]) -> Option<(i32, &[u8])> {
+    let sign_len = (t.first() == Some(&b'+') || t.first() == Some(&b'-')) as usize;
+    let digits = t[sign_len..].iter().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let end = sign_len + digits;
+    let v: i32 = std::str::from_utf8(&t[..end]).ok()?.parse().ok()?;
+    Some((v, &t[end..]))
+}
+
+/// The whitespace separated tokens of a command, as `is >> token` reads them.
+/// Commands are kept as bytes, as in C++, so that a byte which is not UTF-8
+/// reaches the FEN parser and the file system unchanged.
+struct Tokens<'a> {
+    rest: &'a [u8],
+}
+
+impl<'a> Iterator for Tokens<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<&'a [u8]> {
+        let start = self.rest.iter().position(|&c| !is_c_space(c))?;
+        let rest = &self.rest[start..];
+        let len = rest.iter().position(|&c| is_c_space(c)).unwrap_or(rest.len());
+        self.rest = &rest[len..];
+        Some(&rest[..len])
+    }
 }
 
 pub struct UciEngine {
     /// The position as set by `position`, and the moves leading to it.
     pos: Position,
     chess960: bool,
-    current_cmd: String,
+    current_cmd: Vec<u8>,
 }
 
 impl Default for UciEngine {
@@ -71,12 +105,14 @@ impl UciEngine {
     pub fn new() -> UciEngine {
         let mut pos = Position::new();
         pos.set(START_FEN.as_bytes(), false).expect("start position");
-        UciEngine { pos, chess960: false, current_cmd: String::new() }
+        UciEngine { pos, chess960: false, current_cmd: Vec::new() }
     }
 
     fn terminate_on_critical_error(&self, message: &[u8]) -> ! {
         let mut out = io::stdout().lock();
-        let _ = write!(out, "info string CRITICAL ERROR: Command `{}` failed. Reason: ", self.current_cmd);
+        let _ = out.write_all(b"info string CRITICAL ERROR: Command `");
+        let _ = out.write_all(&self.current_cmd);
+        let _ = out.write_all(b"` failed. Reason: ");
         let _ = out.write_all(message);
         let _ = out.write_all(b"\n\n");
         let _ = out.flush();
@@ -84,9 +120,13 @@ impl UciEngine {
     }
 
     /// Reads commands from the command line (one shot) or from stdin.
-    pub fn run(&mut self, args: &[String]) {
+    pub fn run(&mut self, args: &[std::ffi::OsString]) {
         if !args.is_empty() {
-            let cmd = args.iter().map(|a| format!("{a} ")).collect::<String>();
+            let mut cmd = Vec::new();
+            for a in args {
+                cmd.extend_from_slice(os_bytes(a).as_ref());
+                cmd.push(b' ');
+            }
             self.execute(&cmd);
             return;
         }
@@ -96,136 +136,148 @@ impl UciEngine {
         loop {
             line.clear();
             let n = stdin.lock().read_until(b'\n', &mut line).unwrap_or(0);
-            let cmd = if n == 0 {
-                "quit".to_string()
-            } else {
-                if line.last() == Some(&b'\n') {
-                    line.pop();
-                }
-                String::from_utf8_lossy(&line).into_owned()
-            };
-            if !self.execute(&cmd) {
+            if n == 0 {
+                line.extend_from_slice(b"quit");
+            } else if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if !self.execute(&line) {
                 break;
             }
         }
     }
 
     /// Executes one command, returns false on `quit`.
-    pub fn execute(&mut self, cmd: &str) -> bool {
-        self.current_cmd = cmd.to_string();
-        let mut tokens = cmd.split(is_c_space).filter(|t| !t.is_empty());
-        let token = tokens.next().unwrap_or("");
+    pub fn execute(&mut self, cmd: &[u8]) -> bool {
+        self.current_cmd = cmd.to_vec();
+        let mut tokens = Tokens { rest: cmd };
+        let token = tokens.next().unwrap_or(b"");
         let mut out = io::stdout().lock();
 
         match token {
-            "quit" | "stop" => return token != "quit",
-            "uci" => {
+            b"quit" | b"stop" => return token != b"quit",
+            b"uci" => {
                 let _ = writeln!(out, "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n");
                 let _ = writeln!(out, "option name UCI_Chess960 type check default false");
                 let _ = writeln!(out, "uciok");
             }
-            "isready" => {
+            b"isready" => {
                 let _ = writeln!(out, "readyok");
             }
-            "ucinewgame" => {}
-            "setoption" => {
+            b"ucinewgame" => {}
+            b"setoption" => {
                 drop(out);
                 self.setoption(tokens);
             }
-            "position" => {
+            b"position" => {
                 drop(out);
                 self.position(tokens);
             }
-            "go" => {
+            b"go" => {
                 drop(out);
                 self.go(tokens);
             }
-            "dump" => {
+            b"dump" => {
                 drop(out);
                 self.dump(tokens.next());
             }
-            "d" => {
+            b"d" => {
                 let _ = writeln!(out, "\nFen: {}\nKey: {:016X}", self.pos.fen(), self.pos.key());
             }
-            "" => {}
-            t if t.starts_with('#') => {}
+            b"" => {}
+            t if t[0] == b'#' => {}
             _ => {
-                let _ = writeln!(out, "Unknown command: '{cmd}'. Type help for more information.");
+                let _ = out.write_all(b"Unknown command: '");
+                let _ = out.write_all(cmd);
+                let _ = out.write_all(b"'. Type help for more information.\n");
             }
         }
         true
     }
 
-    fn setoption<'a>(&mut self, mut tokens: impl Iterator<Item = &'a str>) {
+    fn setoption<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
         tokens.next(); // Consume the "name" token
-        let mut name = String::new();
-        let mut value = String::new();
+        let mut name = Vec::new();
+        let mut value = Vec::new();
         for t in tokens.by_ref() {
-            if t == "value" {
+            if t == b"value" {
                 break;
             }
             if !name.is_empty() {
-                name.push(' ');
+                name.push(b' ');
             }
-            name += t;
+            name.extend_from_slice(t);
         }
         for t in tokens {
             if !value.is_empty() {
-                value.push(' ');
+                value.push(b' ');
             }
-            value += t;
+            value.extend_from_slice(t);
         }
 
-        if name.eq_ignore_ascii_case("UCI_Chess960") {
+        if name.eq_ignore_ascii_case(b"UCI_Chess960") {
             // A check option only takes "true" or "false"
-            if value == "true" || value == "false" {
-                self.chess960 = value == "true";
+            if value == b"true" || value == b"false" {
+                self.chess960 = value == b"true";
             }
         } else {
-            println!("No such option: {name}");
+            let mut out = io::stdout().lock();
+            let _ = out.write_all(b"No such option: ");
+            let _ = out.write_all(&name);
+            let _ = out.write_all(b"\n");
         }
     }
 
-    fn position<'a>(&mut self, mut tokens: impl Iterator<Item = &'a str>) {
-        let mut fen = String::new();
+    fn position<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
+        let mut fen = Vec::new();
         match tokens.next() {
-            Some("startpos") => {
-                fen = START_FEN.to_string();
+            Some(b"startpos") => {
+                fen.extend_from_slice(START_FEN.as_bytes());
                 tokens.next(); // Consume the "moves" token, if any
             }
-            Some("fen") => {
+            Some(b"fen") => {
                 for t in tokens.by_ref() {
-                    if t == "moves" {
+                    if t == b"moves" {
                         break;
                     }
-                    fen += t;
-                    fen.push(' ');
+                    fen.extend_from_slice(t);
+                    fen.push(b' ');
                 }
             }
             _ => return,
         }
 
         let mut pos = Position::new();
-        if let Err(e) = pos.set(fen.as_bytes(), self.chess960) {
+        if let Err(e) = pos.set(&fen, self.chess960) {
             self.terminate_on_critical_error(e.what());
         }
         for t in tokens {
             let m = to_move(&pos, t);
             if m == Move::none() {
-                self.terminate_on_critical_error(format!("Illegal move: {t}").as_bytes());
+                let mut msg = b"Illegal move: ".to_vec();
+                msg.extend_from_slice(t);
+                self.terminate_on_critical_error(&msg);
             }
             pos.do_move(m);
         }
         self.pos = pos;
     }
 
-    fn go<'a>(&mut self, mut tokens: impl Iterator<Item = &'a str>) {
+    fn go<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
         let mut depth: Depth = 0;
-        while let Some(t) = tokens.next() {
-            if t == "perft" {
-                match tokens.next().map(|v| v.parse::<Depth>()) {
-                    Some(Ok(d)) => depth = d,
-                    _ => self.terminate_on_critical_error(b"Invalid argument for 'perft'"),
+        let mut pending: Option<&[u8]> = None;
+        while let Some(t) = pending.take().or_else(|| tokens.next()) {
+            if t == b"perft" {
+                // `is >> limits.perft`: reads a numeric prefix, and the rest
+                // of the token is read as the next token.
+                match tokens.next().and_then(parse_int_prefix) {
+                    Some((d, rest)) => {
+                        depth = d;
+                        if !rest.is_empty() {
+                            pending = Some(rest);
+                        }
+                    }
+                    None => self.terminate_on_critical_error(b"Invalid argument for 'perft'"),
                 }
             }
         }
@@ -250,7 +302,7 @@ impl UciEngine {
 
     /// `dump`: the current position. `dump <file>`: each position of a file
     /// of FENs, one per line, blank lines skipped, streamed.
-    fn dump(&mut self, filename: Option<&str>) {
+    fn dump(&mut self, filename: Option<&[u8]>) {
         let mut dumper = PositionDumper::new();
         let mut buf = Vec::with_capacity(8192);
 
@@ -261,8 +313,10 @@ impl UciEngine {
             return;
         };
 
-        let Ok(file) = File::open(filename) else {
-            self.terminate_on_critical_error(format!("Unable to open file {filename}").as_bytes());
+        let Ok(file) = File::open(path_from_bytes(filename)) else {
+            let mut msg = b"Unable to open file ".to_vec();
+            msg.extend_from_slice(filename);
+            self.terminate_on_critical_error(&msg);
         };
 
         let stdout = io::stdout();
@@ -290,5 +344,55 @@ impl UciEngine {
             }
         }
         let _ = out.flush();
+    }
+}
+
+/// A command line argument as bytes, unchanged on Unix.
+fn os_bytes(s: &std::ffi::OsStr) -> std::borrow::Cow<'_, [u8]> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::borrow::Cow::Borrowed(s.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::borrow::Cow::Owned(s.to_string_lossy().into_owned().into_bytes())
+    }
+}
+
+/// A file name given as bytes, unchanged on Unix.
+fn path_from_bytes(b: &[u8]) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b))
+    }
+    #[cfg(not(unix))]
+    {
+        std::path::PathBuf::from(String::from_utf8_lossy(b).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn int_prefix_like_istream() {
+        assert_eq!(parse_int_prefix(b"5"), Some((5, &b""[..])));
+        assert_eq!(parse_int_prefix(b"1x"), Some((1, &b"x"[..])));
+        assert_eq!(parse_int_prefix(b"+3"), Some((3, &b""[..])));
+        assert_eq!(parse_int_prefix(b"-2"), Some((-2, &b""[..])));
+        assert_eq!(parse_int_prefix(b"x1"), None);
+        assert_eq!(parse_int_prefix(b"99999999999"), None);
+    }
+
+    #[test]
+    fn tokens_keep_bytes() {
+        let t: Vec<&[u8]> = Tokens { rest: b"  position fen 4k3/8/8/8/8/8/8/4K2\xFF\tw\x0b- " }.collect();
+        assert_eq!(t.len(), 5);
+        let raw: &[u8] = b"a \xff\xfe b";
+        let t: Vec<&[u8]> = Tokens { rest: raw }.collect();
+        assert_eq!(t, vec![&b"a"[..], &b"\xff\xfe"[..], &b"b"[..]]);
     }
 }
