@@ -155,6 +155,8 @@ void UCIEngine::loop() {
             sync_cout << engine.visualize() << sync_endl;
         else if (token == "eval")
             engine.trace_eval();
+        else if (token == "dump")
+            dump(is);
         else if (token == "compiler")
             sync_cout << compiler_info() << sync_endl;
         else if (token == "export_net")
@@ -489,6 +491,20 @@ u64 UCIEngine::perft(const Search::LimitsType& limits) {
     auto nodes = std::get<u64>(result);
     sync_cout << "\nNodes searched: " << nodes << "\n" << sync_endl;
     return nodes;
+}
+
+// Prints the engine internals of the current position as one line of JSON or,
+// when given a file of FENs, of each of its positions:
+//
+// dump          : dump the current position
+// dump blah     : dump the positions in file "blah", one per line
+void UCIEngine::dump(std::istream& args) {
+    std::string filename;
+
+    if (!(args >> filename))
+        engine.dump_position();
+    else if (!engine.dump_positions(path_from_utf8(filename)))
+        terminate_on_critical_error("Unable to open file " + filename);
 }
 
 void UCIEngine::position(std::istringstream& is) {

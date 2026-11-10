@@ -102,6 +102,10 @@ class Engine {
     // utility functions
 
     void trace_eval() const;
+    // print the debug dump of the current position, or of each position
+    // of a file of FENs, returns false if the file cannot be read
+    void dump_position() const;
+    bool dump_positions(const std::filesystem::path& fenFile) const;
 
     const OptionsMap& get_options() const;
     OptionsMap&       get_options();

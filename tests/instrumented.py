@@ -1,4 +1,6 @@
 import argparse
+import gzip
+import json
 import re
 import sys
 import subprocess
@@ -706,6 +708,190 @@ class TestBenchFile(metaclass=OrderedClassMembers):
         assert self.stockfish.process.returncode != 0
 
 
+class TestDump(metaclass=OrderedClassMembers):
+    def beforeAll(self):
+        self.stockfish = Stockfish()
+
+    def afterAll(self):
+        self.stockfish.quit()
+        assert self.stockfish.close() == 0
+
+    def afterEach(self):
+        assert postfix_check(self.stockfish.get_output()) == True
+        self.stockfish.clear_output()
+
+    def _next_dump_line(self):
+        for line in self.stockfish.readline():
+            if line.startswith("{"):
+                return line
+
+    def _dump(self, position):
+        self.stockfish.send_command(f"position {position}")
+        self.stockfish.send_command("dump")
+        return json.loads(self._next_dump_line())
+
+    def test_startpos(self):
+        dump = self._dump("startpos")
+
+        assert dump["fen"] == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        assert dump["chess960"] == False
+        # the key printed by the 'd' command
+        assert dump["key"] == "8F8F01D4562F59FB"
+        assert dump["checkers"] == "0000000000000000"
+        assert dump["non_pawn_material"] == [8302, 8302]
+        assert isinstance(dump["nnue"], int) and isinstance(dump["eval"], int)
+        assert len(dump["moves"]) == 20
+        assert dump["moves"][0] == "a2a3" and dump["moves"][-1] == "g1h3"
+        assert dump["see"] == [0] * 20
+        assert dump["gives_check"] == [0] * 20
+        assert sorted(dump["order_main_shallow"]) == sorted(dump["moves"])
+        assert sorted(dump["order_main_deep"]) == sorted(dump["moves"])
+        assert dump["order_qsearch"] == []
+
+    def test_key_after_is_key_of_child(self):
+        parent = self._dump("startpos")
+
+        for move, key in zip(parent["moves"], parent["key_after"]):
+            assert self._dump(f"startpos moves {move}")["key"] == key
+
+    def test_see_winning_capture(self):
+        dump = self._dump("fen 4k3/8/3p4/8/8/8/3R4/4K3 w - - 0 1")
+
+        # the rook wins a pawn
+        assert dump["see"][dump["moves"].index("d2d6")] == 208
+        assert dump["order_main_shallow"][0] == "d2d6"
+        assert dump["order_qsearch"] == ["d2d6"]
+
+    def test_see_losing_capture(self):
+        dump = self._dump("fen 4k3/2p5/3p4/8/8/8/3R4/4K3 w - - 0 1")
+
+        # the rook wins a pawn and is taken back
+        assert dump["see"][dump["moves"].index("d2d6")] == 208 - 1276
+        # a losing capture comes after the quiet moves, the first of which gives check
+        assert dump["order_main_shallow"][0] == "d2e2"
+        assert dump["order_main_shallow"][-1] == "d2d6"
+        assert dump["order_main_deep"][-1] == "d2d6"
+        assert dump["order_qsearch"] == ["d2d6"]
+        assert dump["gives_check"] == [int(m == "d2e2") for m in dump["moves"]]
+
+    def test_pinned_piece(self):
+        dump = self._dump("fen 4k3/4r3/8/8/8/8/4B3/4K3 w - - 0 1")
+
+        # the bishop on e2 is pinned by the rook on e7
+        assert dump["blockers_for_king"] == ["0000000000001000", "0000000000000000"]
+        assert dump["pinners"] == ["0000000000000000", "0010000000000000"]
+        assert dump["moves"] == ["e1d1", "e1f1", "e1d2", "e1f2"]
+
+    def test_check(self):
+        dump = self._dump("fen 4k3/8/8/8/7b/8/8/R3K2R w KQ - 3 1")
+
+        # checked by the bishop on h4: no evaluation, evasions in every stage
+        assert dump["checkers"] == "0000000080000000"
+        assert dump["nnue"] is None and dump["eval"] is None
+        assert dump["moves"] == ["h1h4", "e1d1", "e1f1", "e1d2", "e1e2"]
+        assert dump["see"] == [825, 0, 0, 0, 0]
+        assert dump["order_main_shallow"] == dump["moves"]
+        assert dump["order_qsearch"] == dump["moves"]
+
+    def test_double_check(self):
+        dump = self._dump("fen 4k3/8/8/8/8/5n2/4r3/4K3 w - - 0 1")
+
+        # only the king can move, and taking the rook comes first
+        assert dump["checkers"] == "0000000000201000"
+        assert dump["moves"] == ["e1d1", "e1f1", "e1e2"]
+        assert dump["see"] == [0, 0, 1276]
+        assert dump["order_main_shallow"] == ["e1e2", "e1d1", "e1f1"]
+
+    def test_checkmate(self):
+        dump = self._dump("fen R5k1/5ppp/8/8/8/8/8/4K3 b - - 0 1")
+
+        assert dump["checkers"] == "0100000000000000"
+        assert dump["moves"] == [] and dump["see"] == [] and dump["key_after"] == []
+        assert dump["order_main_shallow"] == [] and dump["order_qsearch"] == []
+
+    def test_en_passant_and_promotion(self):
+        dump = self._dump("fen 8/P6k/8/8/5Pp1/8/8/4K3 b - f3 0 1")
+        assert dump["fen"] == "8/P6k/8/8/5Pp1/8/8/4K3 b - f3 0 1"
+        assert dump["moves"][0] == "g4f3"
+        assert dump["order_qsearch"] == ["g4f3"]
+
+        dump = self._dump("fen 7k/P7/8/8/8/8/8/4K3 w - - 20 40")
+        assert dump["moves"][:4] == ["a7a8q", "a7a8r", "a7a8b", "a7a8n"]
+        assert dump["gives_check"][:4] == [1, 1, 0, 0]
+        # only the queen promotion belongs to the quiescence search
+        assert dump["order_qsearch"] == ["a7a8q"]
+
+    def test_chess960(self):
+        self.stockfish.send_command("setoption name UCI_Chess960 value true")
+        dump = self._dump("fen bnrqkr2/ppppppbp/5np1/8/8/5NP1/PPPPPPBP/BNRQKR2 w FCfc - 2 4")
+        self.stockfish.send_command("setoption name UCI_Chess960 value false")
+
+        assert dump["chess960"] == True
+        assert dump["fen"] == "bnrqkr2/ppppppbp/5np1/8/8/5NP1/PPPPPPBP/BNRQKR2 w FCfc - 2 4"
+        # castling is the king taking its own rook
+        assert dump["moves"][-1] == "e1f1"
+
+    def _check_sample(self, name, count):
+        # compare with the golden files, see tests/differential
+        sample = PATH / "differential" / "sample"
+        with gzip.open(sample / f"{name}.fen.gz", "rt") as f:
+            fens = f.readlines()[:count]
+        with gzip.open(sample / f"{name}.jsonl.gz", "rt") as f:
+            golden = f.readlines()[:count]
+        with open(f"{name}.fen", "w") as f:
+            f.writelines(fens)
+
+        self.stockfish.send_command(f"dump {name}.fen")
+        for expected in golden:
+            assert self._next_dump_line() == expected.strip()
+
+    def test_golden_sample(self):
+        self._check_sample("standard", 500)
+
+    def test_golden_sample_chess960(self):
+        self.stockfish.send_command("setoption name UCI_Chess960 value true")
+        self._check_sample("chess960", 250)
+        self.stockfish.send_command("setoption name UCI_Chess960 value false")
+
+
+class TestDumpFile(metaclass=OrderedClassMembers):
+    def beforeEach(self):
+        self.stockfish = None
+
+    def afterEach(self):
+        assert postfix_check(self.stockfish.get_output()) == True
+        self.stockfish.clear_output()
+
+    def _dump(self, name, content):
+        with open(name, "w") as f:
+            f.write(content)
+        self.stockfish = Stockfish(f"dump {name}".split(" "), True)
+        return [json.loads(l) for l in self.stockfish.process.stdout.splitlines() if l.startswith("{")]
+
+    def test_valid_file(self):
+        fens = ["4k3/8/4K3/8/8/8/8/8 w - - 0 1", "4k3/8/4K3/8/8/8/8/8 b - - 0 1"]
+        dumps = self._dump("good.epd", fens[0] + "\n\n" + fens[1] + "\n")
+        assert self.stockfish.process.returncode == 0
+        assert [d["fen"] for d in dumps] == fens
+
+    def test_empty_file(self):
+        assert self._dump("empty.epd", "") == []
+        assert self.stockfish.process.returncode == 0
+
+    def test_malformed_fen(self):
+        # a position that cannot be set up is reported, the next ones are still dumped
+        dumps = self._dump("bad.epd", "not a valid fen\n4k3/8/4K3/8/8/8/8/8 w - - 0 1\n")
+        assert self.stockfish.process.returncode == 0
+        assert len(dumps) == 2
+        assert "error" in dumps[0] and dumps[0]["input"] == "not a valid fen"
+        assert dumps[1]["fen"] == "4k3/8/4K3/8/8/8/8/8 w - - 0 1"
+
+    def test_missing_file(self):
+        self.stockfish = Stockfish("dump does_not_exist.epd".split(" "), True, expect_failure=True)
+        assert self.stockfish.process.returncode != 0
+        assert "CRITICAL ERROR" in self.stockfish.process.stdout
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Stockfish with testing options")
     parser.add_argument("--valgrind", action="store_true", help="Run valgrind testing")
@@ -747,6 +933,8 @@ if __name__ == "__main__":
             TestInvalidFEN,
             TestInvalidOptions,
             TestBenchFile,
+            TestDump,
+            TestDumpFile,
         ]
     )
 
