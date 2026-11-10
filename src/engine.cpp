@@ -22,7 +22,9 @@
 #include <cassert>
 #include <filesystem>
 #include <deque>
+#include <fstream>
 #include <iosfwd>
+#include <iostream>
 #include <memory>
 #include <ostream>
 #include <sstream>
@@ -30,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "dump.h"
 #include "evaluate.h"
 #include "misc.h"
 #include "nnue/network.h"
@@ -313,6 +316,37 @@ void Engine::trace_eval() const {
     verify_network();
 
     sync_cout << "\n" << Eval::trace(p, *network) << sync_endl;
+}
+
+void Engine::dump_position() const {
+    verify_network();
+
+    PositionDumper dumper(*network);
+
+    sync_cout << dumper.dump(pos.fen(), options["UCI_Chess960"]) << sync_endl;
+}
+
+bool Engine::dump_positions(const std::filesystem::path& fenFile) const {
+    std::ifstream file(fenFile);
+
+    if (!file.is_open())
+        return false;
+
+    verify_network();
+
+    PositionDumper dumper(*network);
+    const bool     isChess960 = options["UCI_Chess960"];
+    std::string    fen;
+
+    // The positions are streamed, there can be far too many to hold in memory
+    sync_cout_start();
+    while (getline(file, fen))
+        if (!is_whitespace(fen))
+            std::cout << dumper.dump(fen, isChess960) << '\n';
+    std::cout << std::flush;
+    sync_cout_end();
+
+    return true;
 }
 
 const OptionsMap& Engine::get_options() const { return options; }
