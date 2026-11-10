@@ -39,6 +39,9 @@ DEFAULT_EXE = ROOT / "src" / "stockfish"
 # Lists with one entry per legal move, in the order of "moves"
 PER_MOVE_FIELDS = ("see", "gives_check", "key_after")
 
+# Stands for a member an object does not have, which is not the same as null
+MISSING = object()
+
 
 @contextlib.contextmanager
 def open_read(path):
@@ -48,9 +51,15 @@ def open_read(path):
         proc = subprocess.Popen(["zstd", "-dc", path], stdout=subprocess.PIPE)
         try:
             yield proc.stdout
-        finally:
+        except BaseException:
             proc.stdout.close()
             proc.wait()
+            raise
+        # A truncated or damaged file must not pass for a shorter one
+        proc.stdout.read()
+        proc.stdout.close()
+        if proc.wait() != 0:
+            sys.exit(f"zstd failed reading {path}")
     elif path.endswith(".gz"):
         with gzip.open(path, "rb") as f:
             yield f
@@ -89,17 +98,37 @@ def open_write(path):
 
 
 @contextlib.contextmanager
+def open_output(path):
+    """Like open_write(), but the file only appears if everything went well."""
+    path = pathlib.Path(path)
+    partial = path.with_name(".partial-" + path.name)
+    try:
+        with open_write(partial) as f:
+            yield f
+        os.replace(partial, path)
+    finally:
+        if partial.exists():
+            partial.unlink()
+
+
+@contextlib.contextmanager
 def dump_lines(corpus, chess960):
-    """Runs the engine over a corpus and yields an iterator on its dump lines."""
+    """Runs the engine over a corpus and yields an iterator on its dump lines.
+
+    The iterator ends the program if the engine does not print exactly one line
+    per position of the corpus.
+    """
     exe = os.environ.get("EXE", str(DEFAULT_EXE))
     prefix = shlex.split(os.environ.get("RUN_PREFIX", ""))
 
     # The engine reads the positions from a plain file
     with tempfile.TemporaryDirectory(prefix="sf-differential-") as tmp:
         fens = os.path.join(tmp, "positions.fen")
+        expected = 0
         with open_read(corpus) as src, open(fens, "wb") as dst:
             for line in src:
                 dst.write(line)
+                expected += bool(line.strip())  # the engine skips blank lines
 
         commands = f"dump {fens}\nquit\n"
         if chess960:
@@ -112,19 +141,25 @@ def dump_lines(corpus, chess960):
         proc.stdin.write(commands.encode())
         proc.stdin.close()
 
-        # Everything else on stdout is the banner and UCI info strings
-        yield (line for line in proc.stdout if line.startswith(b"{"))
+        def lines():
+            count = 0
+            # Everything else on stdout is the banner and UCI info strings
+            for line in proc.stdout:
+                if line.startswith(b"{"):
+                    count += 1
+                    yield line
+            proc.stdout.close()
+            if proc.wait() != 0:
+                sys.exit(f"{exe} exited with status {proc.returncode}")
+            if count != expected:
+                sys.exit(f"{exe} printed {count} dump lines for the {expected} positions of {corpus}")
 
-        for _ in proc.stdout:
-            pass
-        proc.stdout.close()
-        if proc.wait() != 0:
-            sys.exit(f"{exe} exited with status {proc.returncode}")
+        yield lines()
 
 
 def cmd_generate(args):
     count, digest = 0, hashlib.sha256()
-    with dump_lines(args.corpus, args.chess960) as lines, open_write(args.golden) as out:
+    with dump_lines(args.corpus, args.chess960) as lines, open_output(args.golden) as out:
         for line in lines:
             if line.startswith(b'{"error"'):
                 sys.exit(f"the engine rejects a position of the corpus: {line.decode().strip()}")
@@ -144,7 +179,8 @@ def describe(field, expected, actual, moves):
         if field in PER_MOVE_FIELDS and index < len(moves):
             where += f" (move {moves[index]})"
         return f"{field}{where}: expected {expected[index]}, got {actual[index]}"
-    return f"{field}: expected {json.dumps(expected)}, got {json.dumps(actual)}"
+    show = lambda value: "no such member" if value is MISSING else json.dumps(value)
+    return f"{field}: expected {show(expected)}, got {show(actual)}"
 
 
 def cmd_verify(args):
@@ -155,10 +191,8 @@ def cmd_verify(args):
     with dump_lines(args.corpus, args.chess960) as lines, open_read(args.golden) as golden:
         for expected_line, actual_line in itertools.zip_longest(golden, lines):
             if expected_line is None or actual_line is None:
-                which = "fewer" if actual_line is None else "more"
-                print(f"the engine printed {which} positions than the golden file holds")
-                failed += 1
-                break
+                which = "fewer" if expected_line is None else "more"
+                sys.exit(f"{args.golden} holds {which} positions than {args.corpus}")
 
             count += 1
             if fields is None and expected_line == actual_line:
@@ -174,7 +208,7 @@ def cmd_verify(args):
                 actual = {"error": "not JSON: " + actual_line.decode(errors="replace").strip()}
 
             names = fields if fields is not None else sorted(set(expected) | set(actual))
-            differing = [f for f in names if expected.get(f) != actual.get(f)]
+            differing = [f for f in names if expected.get(f, MISSING) != actual.get(f, MISSING)]
             if not differing:
                 continue
 
@@ -184,7 +218,9 @@ def cmd_verify(args):
             if failed <= args.max_report:
                 print(f"position {count}: {expected.get('fen', '?')}")
                 for field in differing:
-                    line = describe(field, expected.get(field), actual.get(field), expected.get("moves", []))
+                    line = describe(
+                        field, expected.get(field, MISSING), actual.get(field, MISSING), expected.get("moves", [])
+                    )
                     print(f"  {line}")
 
     what = f"fields {args.fields}" if fields else "all fields"
@@ -200,8 +236,9 @@ def cmd_canonicalize(args):
     seen = set()
     count = changed = rejected = 0
     with open_read(args.corpus) as original, dump_lines(args.corpus, args.chess960) as lines:
-        with open_write(args.output) as out:
-            for fen, line in zip(original, lines):
+        with open_output(args.output) as out:
+            # dump_lines() checks that there is one line per position
+            for fen, line in itertools.zip_longest((f for f in original if f.strip()), lines):
                 count += 1
                 position = json.loads(line)
                 if "error" in position:

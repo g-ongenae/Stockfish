@@ -38,8 +38,8 @@ where, then the number of differing positions per field, and exits with 1:
 
 To be verified, a binary has to read UCI commands on its standard input,
 understand `setoption name UCI_Chess960 value true`, `dump <file>` and `quit`,
-and print the dump lines on its standard output. Lines that do not start with
-`{` are ignored. A harness in another language can also just read the golden
+and print the dump lines on its standard output, exactly one per position. Lines
+that do not start with `{` are ignored. A harness in another language can also just read the golden
 files and compare in process.
 
 ## The dump command
@@ -95,7 +95,7 @@ six are indexed by piece type, from pawn to king.
 | `moves` | Legal moves in the order `MoveList<ALL>` generates them, in UCI notation. Castling is `e1g1` in standard chess and king takes rook in Chess960. |
 | `see` | For each move, its static exchange evaluation: the largest `t` for which `see_ge(move, t)` holds, so that `see_ge(move, t) == (t <= see)`. Found by bisection; `see_ge()` was checked to be monotonic for all 8,193 thresholds on every move of the corpus. Castling, en passant and promotions are 0 by definition. |
 | `gives_check` | For each move, 1 if it gives check. |
-| `key_after` | For each move, `key` after `do_move()`. Pins down the incremental update, including the en passant and castling rules. |
+| `key_after` | For each move, `key` after `do_move()`. Pins down the incremental update of that one key, one move deep, including the en passant and castling rules. |
 | `order_main_shallow`, `order_main_deep` | The moves in the order the `MovePicker` of the main search returns them, at depth 1 and 16. |
 | `order_qsearch` | Same for the `MovePicker` of the quiescence search (depth 0): captures and queen promotions, or all evasions when in check. |
 
@@ -107,6 +107,17 @@ values and SEE thresholds, on the bonus for checks and the penalties for moves
 to attacked squares, and on the exact behavior of `partial_insertion_sort`,
 which leaves the quiet moves scoring below `-3560 * depth` unsorted: most of
 them at depth 1, none at depth 16.
+
+## What it does not cover
+
+Every position is set up from its FEN, and everything but `key_after` is
+computed on that fresh position. A port can therefore pass with a wrong
+incremental update of the pawn, material, minor piece or non-pawn keys, or of
+the NNUE accumulators, as both are only ever built from scratch here. Nothing
+goes deeper than one move either: repetitions, null moves and the state kept
+along a line of play are out of reach, and so is the search itself. Comparing
+each incremental value with its from-scratch one inside the port covers the
+first gap; perft and the bench signature remain the tests of the rest.
 
 ## The corpus
 
@@ -162,7 +173,7 @@ In git:
 
 | File | |
 | --- | --- |
-| `make_corpus.sh` | Rebuilds everything below from the dumps, in about 3 minutes. |
+| `make_corpus.sh` | Rebuilds everything below from the dumps, in about 3 minutes. Fails, leaving the sample alone, if what it built is not what `CONTENT.sha256` records; `--update` records the new files instead. |
 | `verify.sh` | Verifies a binary against the sample or the full golden files. |
 | `extract_positions.py` | PGN on stdin to FENs on stdout. Needs python-chess (`pip install chess`, 1.11.2 was used). |
 | `differential.py` | `generate`, `verify`, `canonicalize`, `sample` and `stats`. Standard library only. |
@@ -179,5 +190,9 @@ Not in git, in `tests/differential/data` (205 MB):
 | `standard.jsonl.zst` | 146 MB | 603 MB |
 | `chess960.jsonl.zst` | 31 MB | 125 MB |
 
-Everything is streamed. The only uncompressed copy ever written is the file of
-FENs handed to the engine, in a temporary directory, 17 MB at most.
+The dumps and the golden files are never decompressed to disk. What is written
+uncompressed is small: the candidate positions during a rebuild (17 MB, deleted
+once the corpus is written) and the file of FENs handed to the engine, in a
+temporary directory (17 MB at most). Memory is not bounded independently of the
+corpus, though: the extraction and the sampling keep one hash per position, and
+`canonicalize` keeps the FENs, which is some tens of MB at this size.
