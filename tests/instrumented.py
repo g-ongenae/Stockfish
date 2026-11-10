@@ -936,13 +936,16 @@ class TestDumpLine(metaclass=OrderedClassMembers):
             # what the moves maintain is what a fresh set up computes
             dump = self._dump(f"startpos moves {' '.join(moves[:ply])}")
             for member in ("fen", "key", "pawn_key", "material_key", "minor_piece_key",
-                           "non_pawn_key", "non_pawn_material", "checkers"):
+                           "non_pawn_key", "non_pawn_material", "checkers", "blockers_for_king",
+                           "pinners", "check_squares", "threats"):
                 assert record[member] == dump[member]
             if record["nnue"] is not None:
                 assert (record["nnue"], record["eval"]) == (dump["nnue"], dump["eval"])
             if record["probe"] is not None:
                 index = dump["moves"].index(record["probe"]["move"])
                 assert record["probe"]["key"] == dump["key_after"][index]
+                # the probe is never the next move of the line
+                assert ply == len(moves) or record["probe"]["move"] != moves[ply]
 
         # plies 3, 6 and 7 of every 8 are not evaluated, nor probed
         assert [r["nnue"] is None for r in records[:-1]] == [
@@ -958,6 +961,7 @@ class TestDumpLine(metaclass=OrderedClassMembers):
         assert undo["undo"] == 7
         # back down the line, the keys are those of the way up
         assert undo["keys"] == [r["key"] for r in reversed(records[:-2])]
+        assert undo["fens"] == [r["fen"] for r in reversed(records[:-2])]
         assert undo["fen"] == records[0]["fen"] and undo["key"] == records[0]["key"]
         # every position of the search window is evaluated on the way back
         assert all(v is not None for v in undo["nnues"])
@@ -971,7 +975,16 @@ class TestDumpLine(metaclass=OrderedClassMembers):
         assert null["fen"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"
         dump = self._dump(f"fen {null['fen']}")
         assert (null["key"], null["nnue"]) == (dump["key"], dump["nnue"])
+        assert (null["plies_from_null"], null["repetition"], null["captured"]) == (0, 0, None)
+        # a reply to the null move, made and undone
+        reply = null["reply"]
+        assert reply["key"] == dump["key_after"][dump["moves"].index(reply["move"])]
+        assert (reply["plies_from_null"], reply["repetition"]) == (1, 0)
         assert records[2]["plies_from_null"] == 2
+
+    def test_probe_is_not_the_next_move(self):
+        records = self._dump_line("startpos moves a2a3")
+        assert records[0]["probe"]["move"] != "a2a3"
 
     def test_repetition(self):
         records = self._dump_line("startpos moves g1f3 g8f6 f3g1 f6g8 g1f3 g8f6 f3g1 f6g8")
@@ -1032,9 +1045,19 @@ class TestDumpLine(metaclass=OrderedClassMembers):
         with open(f"{name}.lines", "w") as f:
             f.writelines(lines)
 
+        # the sample holds the dumps of all these lines, complete
+        assert count == 0
+
         self.stockfish.send_command(f"dumpline {name}.lines")
         for record in expected:
             assert self._next_dump_line() == record
+
+        # and nothing more is printed
+        self.stockfish.send_command("isready")
+        for line in self.stockfish.readline():
+            assert not line.startswith("{")
+            if line == "readyok":
+                break
 
     def test_golden_sample(self):
         self._check_sample("standard", 10)

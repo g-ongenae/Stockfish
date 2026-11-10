@@ -136,21 +136,30 @@ illegal move) gives instead the single record
 `{"error":"<reason>","input":"<line>"}`, and nothing is dumped for it. The moves
 are all checked first, on a separate position.
 
+For `dumpline startpos moves e2e4 d7d5 e4d5 g8f6`, the record of ply 2 and the
+walk back, with some lists left out:
+
     {"ply":2,"move":"d7d5","fen":"rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
      "key":"96270AD18105C788","pawn_key":"88C3B25994A695DA","material_key":"A0710EF633754DD6",
      "minor_piece_key":"41AF5A253E95F502","non_pawn_key":["85DC4DDCD53BCFCC","54B51DF93C8CF372"],
-     "non_pawn_material":[8302,8302],"checkers":"0000000000000000","captured":null,
-     "plies_from_null":2,"repetition":0,"is_draw":false,"has_repeated":false,
-     "upcoming_repetition":false,"nnue":25,"eval":31,
-     "null":{"key":"36D22A7548FF9C44","fen":"rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1","nnue":103},
-     "probe":{"move":"e4d5","key":"06B960AABFBB9995","pawn_key":"B8A8F88663E2900B",
-              "material_key":"2CC3FFFEAC908A6B","minor_piece_key":"41AF5A253E95F502",
+     "non_pawn_material":[8302,8302],"checkers":"0000000000000000",
+     "blockers_for_king":[...],"pinners":[...],"check_squares":[...],"threats":[...],
+     "captured":null,"plies_from_null":2,"repetition":0,"is_draw":false,
+     "has_repeated":false,"upcoming_repetition":false,"nnue":25,"eval":31,
+     "null":{"key":"36D22A7548FF9C44","fen":"rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+             "plies_from_null":0,"repetition":0,"captured":null,"nnue":103,
+             "reply":{"move":"d5e4","key":"46231B0486CB37BD","pawn_key":"58C7A38C936865EF",
+                      "material_key":"5A812EC5E7DDA968","minor_piece_key":"41AF5A253E95F502",
+                      "non_pawn_key":["85DC4DDCD53BCFCC","54B51DF93C8CF372"],
+                      "checkers":"0000000000000000","plies_from_null":1,"repetition":0,"nnue":-254}},
+     "probe":{"move":"a2a3","key":"45094ECD2746B368","pawn_key":"FB18D6E1FB1FBAF6",
+              "material_key":"A0710EF633754DD6","minor_piece_key":"41AF5A253E95F502",
               "non_pawn_key":["85DC4DDCD53BCFCC","54B51DF93C8CF372"],
-              "checkers":"0000000000000000","nnue":-136}}
+              "checkers":"0000000000000000","plies_from_null":3,"repetition":0,"nnue":56}}
     ...
     {"undo":4,"keys":["06B960AABFBB9995","96270AD18105C788","B46022469E3DD31B","8F8F01D4562F59FB"],
-     "nnues":[-136,25,-24,34],"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-     "key":"8F8F01D4562F59FB", ...}
+     "fens":[...],"nnues":[-136,25,-24,34],
+     "fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","key":"8F8F01D4562F59FB", ...}
 
 Members of a position record, in this order. Members with the name of a member
 of `dump` have the same meaning and format, but the value is the one maintained
@@ -164,6 +173,7 @@ by the moves rather than computed on a fresh position.
 | `key`, `pawn_key`, `material_key`, `minor_piece_key`, `non_pawn_key` | The keys, updated incrementally. |
 | `non_pawn_material` | Per color, updated incrementally. |
 | `checkers` | As set by `do_move()` from its `givesCheck` argument. |
+| `blockers_for_king`, `pinners`, `check_squares`, `threats` | The bitboards cached in `StateInfo`, as set by `do_move()` (the threats are computed on first use). Same format as in `dump`. |
 | `captured` | `StateInfo::capturedPiece`, as a FEN letter, or `null`. |
 | `plies_from_null` | `StateInfo::pliesFromNull`; it counts from the start of the line, not of the game. |
 | `repetition` | `StateInfo::repetition`: the distance in plies to the previous occurrence of the position within the reach of rule50 and the last null move, negative if that one was itself a repetition, else 0. |
@@ -171,12 +181,12 @@ by the moves rather than computed on a fresh position.
 | `has_repeated` | `Position::has_repeated()`. |
 | `nnue` | `Network::evaluate()` on the accumulator stack, as search calls it. `null` when in check, and at the plies that are skipped (see below). |
 | `eval` | `Eval::evaluate()` with an optimism of 0, `null` when `nnue` is. |
-| `null` | A null move made and undone, as in null move pruning, at the positions that are evaluated: the `key` and `fen` after `do_null_move()`, and the `nnue` then, from the same accumulators. `null` when in check or skipped. |
-| `probe` | A move other than the one of the line, made with an accumulator push and undone with a pop, as search does with the children of a node: its `move`, the keys and `checkers` after it, and the `nnue` then (`null` if it gives check). `null` when skipped or without legal moves. |
+| `null` | A null move made and undone, as in null move pruning, at the positions that are evaluated: the `key`, `fen`, `plies_from_null`, `repetition` and `captured` after `do_null_move()`, the `nnue` then, from the same accumulators, and a `reply`: a move made after the null move, as the null move search does, given like `probe`. `null` when in check or skipped. |
+| `probe` | A move other than the next one of the line, made with an accumulator push and undone with a pop, as search does with the children of a node: its `move`, the keys, `checkers`, `plies_from_null` and `repetition` after it, and the `nnue` then (`null` if it gives check). `null` when skipped or without another legal move. |
 
-The walk back record has `undo`, the number of moves undone; `keys`, the `key`
-after each `undo_move()`, from the next to last position down to the start
-position; `nnues`, the evaluation at each of these positions, popping the
+The walk back record has `undo`, the number of moves undone; `keys` and `fens`,
+the `key` and `fen` after each `undo_move()`, from the next to last position down
+to the start position; `nnues`, the evaluation at each of these positions, popping the
 accumulator stack on the way, `null` in check and below the root of the last
 search window; then the `fen` and the five keys of the start position reached.
 
@@ -192,15 +202,18 @@ the point is to exercise every way of reaching them):
   forward from the last computed accumulator or, when a king move or a change of
   heavy material in between requires a refresh, backward from the refreshed one
   (`AccumulatorStack::evaluate`). Positions in check are not evaluated either.
-- At each position that is evaluated, the null move comes after the evaluation,
-  then the probe move, then the move of the line.
+- At each position that is evaluated, the null move comes after the evaluation
+  (and its reply after it, pushing the accumulator stack on top of the position's
+  accumulator), then the probe move, then the move of the line.
 - The probe is chosen among the legal moves sorted by their UCI notation, so that
   the order of move generation does not matter. They are grouped in classes:
   special (castling, en passant, promotions), other captures, other king moves,
   and all. At ply `p` the first non-empty class in the preferences number
   `p % 4`, which are (special, captures, all), (king moves, captures, all),
   (captures, special, all) and (all), gives the probe: its move number
-  `(p / 4) % size` of the class.
+  `(p / 4) % size` of the class. The next move of the line is left out of the
+  classes; the reply to a null move is chosen the same way, from the null move
+  position, with nothing left out.
 - On the walk back the positions of the last window are evaluated again,
   reusing the accumulators computed on the way up, including those computed
   backward or as intermediate steps of a chain.
@@ -217,9 +230,9 @@ and probes. Not covered:
 - The search itself: move ordering with real history tables, pruning,
   extensions, the transposition table, time management. Perft and the bench
   signature remain the tests of these.
-- Moves after a null move: the null move is undone at once, so
-  `plies_from_null` never restarts from 0 along a line, and repetitions are
-  never cut short by a null move.
+- Play below a null move beyond its one reply: `plies_from_null` never goes
+  past 1 there, so a repetition is never cut short by a null move, and no
+  accumulator chain runs below one.
 - Repetitions that reach back before the start of a line: the history before
   the start position is unknown to the engine, as with `position fen`.
 - Accumulator chains longer than those of the schedule (three moves, or more
@@ -227,9 +240,11 @@ and probes. Not covered:
   of the stack is the same as at the root of a search, but a search can also
   reach the same depth through many different paths.
 - `Position::see_ge`, `gives_check`, move generation and the move picker after
-  moves: they are computed from scratch from the board, so the per-position
-  corpus covers them, provided the board itself is right, which the `fen`
-  member checks.
+  moves. They work from the board and from the bitboards cached in `StateInfo`;
+  `dumpline` checks the board (`fen`) and those bitboards after every move of
+  the line, and the per-position corpus checks what is computed from them. The
+  cached bitboards are not printed after probe, null and reply moves, nor after
+  each `undo_move()` of the walk back (where `key`, `fen` and `nnue` are).
 - The internal steps of the accumulator updates (dirty pieces, dirty threats,
   the refresh cache entries): only their result, the network output, is
   compared. A port that gets the output right through other steps passes.
@@ -308,13 +323,13 @@ As measured by `differential.py --lines stats`:
 | --- | ---: | ---: |
 | positions (records but the walk backs) | 246,632 | 99,844 |
 | evaluated (and null move made) | 141,082 | 57,563 |
-| probe move made | 155,611 | 63,103 |
+| probe move made | 153,180 | 62,310 |
 | positions evaluated on the walk back | 83,126 | 37,530 |
 | in the second search window or later (ply 64+) | 84,357 | 27,992 |
 | lines of 200 plies or more | 82 | 24 |
-| castling moves (line / probe) | 3,859 / 4,673 | 1,163 / 4,183 |
-| en passant captures (line / probe) | 334 / 178 | 145 / 70 |
-| promotions (line / probe) | 1,495 / 1,019 | 518 / 384 |
+| castling moves (line / probe) | 3,859 / 3,810 | 1,163 / 4,016 |
+| en passant captures (line / probe) | 334 / 78 | 145 / 26 |
+| promotions (line / probe) | 1,495 / 1,041 | 518 / 391 |
 | underpromotions (line) | 398 | 148 |
 | captures (line) | 50,504 | 21,080 |
 | king moves (line) | 50,359 | 17,280 |
@@ -329,8 +344,9 @@ As measured by `differential.py --lines stats`:
 | rule50 counter of 100 or more | 86 | 2 |
 
 Every value of these golden files was also checked against `dump` on the same
-position set up from its FEN (keys, material, checkers, `nnue` and `eval`, the
-key after the probe move and after the null move, 545,121 positions in all):
+position set up from its FEN (keys, material, the cached bitboards, `nnue` and
+`eval`, the key after the probe move, the key and `nnue` after the null move and
+the key after its reply, 545,121 positions in all):
 they agree, as they must for this engine.
 
 ## Files
@@ -342,12 +358,12 @@ In git:
 | `make_corpus.sh` | Rebuilds everything below from the dumps, in about 20 minutes on a slow machine. Fails, leaving the sample alone, if what it built is not what `CONTENT.sha256` records; `--update` records the new files instead. |
 | `verify.sh` | Verifies a binary against the sample or the full golden files, of positions or of lines. |
 | `extract_positions.py` | PGN on stdin to FENs, or with `--lines` to lines of play, on stdout. Needs python-chess (`pip install chess`, 1.11.2 was used). |
-| `differential.py` | `generate`, `verify`, `canonicalize`, `sample` and `stats`, with `--lines` for lines of play. Standard library only. |
+| `differential.py` | `generate`, `verify`, `canonicalize`, `sample` and `stats`, with `--lines` for lines of play. With `--lines`, the records are parsed before they are grouped by line, and each group must have the shape its corpus line implies (plies 0 to `n` in order, then a walk back over `n` moves with `n` entries in each list, or a single error), in the engine output as in the golden file; `generate` and `sample` refuse to write anything else. Standard library only. |
 | `SHA256SUMS` | Checksums of the two dumps. |
 | `CONTENT.sha256` | Checksums of the uncompressed corpus and golden files, to tell whether a rebuild gave the same ones. |
-| `sample/` | 4,000 + 1,000 positions drawn uniformly from the two sets, with their golden lines (2.7 MB), and 100 + 50 lines of play (`*.lines.gz`, 1.3 MB). Also checked by `tests/instrumented.py`. |
+| `sample/` | 4,000 + 1,000 positions drawn uniformly from the two sets, with their golden lines (2.7 MB), and 100 + 50 lines of play (`*.lines.gz`, 2.0 MB). Also checked by `tests/instrumented.py`. |
 
-Not in git, in `tests/differential/data` (237 MB):
+Not in git, in `tests/differential/data` (253 MB):
 
 | File | Size | Uncompressed |
 | --- | ---: | ---: |
@@ -356,8 +372,8 @@ Not in git, in `tests/differential/data` (237 MB):
 | `standard.jsonl.zst` | 146 MB | 603 MB |
 | `chess960.jsonl.zst` | 31 MB | 125 MB |
 | `standard.lines.zst`, `chess960.lines.zst` | 0.6 MB | 1.9 MB |
-| `standard.lines.jsonl.zst` | 22 MB | 179 MB |
-| `chess960.lines.jsonl.zst` | 9.7 MB | 73 MB |
+| `standard.lines.jsonl.zst` | 34 MB | 335 MB |
+| `chess960.lines.jsonl.zst` | 15 MB | 137 MB |
 
 The dumps and the golden files are never decompressed to disk. What is written
 uncompressed is small: the candidate positions during a rebuild (17 MB, deleted

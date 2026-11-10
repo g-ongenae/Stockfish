@@ -524,7 +524,7 @@ void UCIEngine::dump_line(std::istream& args) {
     if (first.empty() || first == "startpos" || first == "fen")
         engine.dump_line(rest);
     else if (!engine.dump_lines(path_from_utf8(first)))
-        terminate_on_critical_error("Unable to open file " + first);
+        terminate_on_critical_error("Unable to read file " + first);
 }
 
 void UCIEngine::position(std::istringstream& is) {

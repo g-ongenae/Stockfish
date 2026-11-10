@@ -108,7 +108,7 @@ class Engine {
     bool dump_positions(const std::filesystem::path& fenFile) const;
     // print the debug dump along a line of play given as the arguments of the
     // 'position' command, or along each line of a file of such lines, returns
-    // false if the file cannot be read
+    // false if the file cannot be opened or read
     void dump_line(const std::string& line) const;
     bool dump_lines(const std::filesystem::path& lineFile) const;
 

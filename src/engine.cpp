@@ -385,7 +385,8 @@ bool Engine::dump_lines(const std::filesystem::path& lineFile) const {
     std::cout << std::flush;
     sync_cout_end();
 
-    return true;
+    // A read error must not pass for the end of the file
+    return !file.bad();
 }
 
 const OptionsMap& Engine::get_options() const { return options; }

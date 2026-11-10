@@ -143,6 +143,24 @@ void append_keys(std::string& out, const Position& pos) {
     append_hex_list(out, {pos.non_pawn_key(WHITE), pos.non_pawn_key(BLACK)});
 }
 
+// The bitboards that StateInfo caches for the position, as in the output of
+// 'dump'. The threats are computed lazily, on first use.
+void append_cached_bitboards(std::string& out, const Position& pos) {
+    append_key(out, "checkers");
+    append_hex(out, pos.checkers());
+    append_key(out, "blockers_for_king");
+    append_hex_list(out, {pos.blockers_for_king(WHITE), pos.blockers_for_king(BLACK)});
+    append_key(out, "pinners");
+    append_hex_list(out, {pos.pinners(WHITE), pos.pinners(BLACK)});
+    append_key(out, "check_squares");
+    append_hex_list(out,
+                    {pos.check_squares(PAWN), pos.check_squares(KNIGHT), pos.check_squares(BISHOP),
+                     pos.check_squares(ROOK), pos.check_squares(QUEEN), pos.check_squares(KING)});
+    append_key(out, "threats");
+    append_hex_list(out, {pos.threats_by(PAWN), pos.threats_by(KNIGHT), pos.threats_by(BISHOP),
+                          pos.threats_by(ROOK), pos.threats_by(QUEEN), pos.threats_by(KING)});
+}
+
 // Splits the arguments of a 'position' command into a FEN and moves. Returns
 // false if they are malformed.
 bool parse_line(const std::string& line, std::string& fen, std::vector<std::string>& moves) {
@@ -176,8 +194,9 @@ bool parse_line(const std::string& line, std::string& fen, std::vector<std::stri
 // and grouped in classes: special moves (castling, en passant, promotions),
 // other captures, other king moves, and all moves. Depending on the ply, the
 // first non-empty class of a list of preferences is chosen, then a move of
-// that class, cycling through them along the line.
-Move probe_move(const Position& pos, int ply) {
+// that class, cycling through them along the line. The move 'excluded', the
+// next one of the line, is never chosen.
+Move probe_move(const Position& pos, int ply, Move excluded = Move::none()) {
 
     enum {
         Special,
@@ -190,6 +209,9 @@ Move probe_move(const Position& pos, int ply) {
 
     for (Move m : MoveList<ALL>(pos))
     {
+        if (m == excluded)
+            continue;
+
         auto entry = std::make_pair(UCIEngine::move(m, pos.is_chess960()), m);
 
         if (m.type_of() != NORMAL)
@@ -444,6 +466,36 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
             out += "null";
     };
 
+    const auto appendCaptured = [&]() {
+        if (Piece pc = pos.captured_piece())
+            append_string(out, std::string(1, PieceToChar[pc]));
+        else
+            out += "null";
+    };
+
+    // A move made, evaluated and undone with an accumulator push and pop, as
+    // search does with the children of a node
+    const auto appendChild = [&](Move m) {
+        StateInfo childSt;
+        auto&     dirties = accumulators.push(pos);
+        pos.do_move(m, childSt, pos.gives_check(m), dirties);
+        out += '{';
+        append_key(out, "move");
+        appendMove(m);
+        append_keys(out, pos);
+        append_key(out, "checkers");
+        append_hex(out, pos.checkers());
+        append_key(out, "plies_from_null");
+        out += std::to_string(pos.state()->pliesFromNull);
+        append_key(out, "repetition");
+        out += std::to_string(pos.state()->repetition);
+        append_key(out, "nnue");
+        appendNnue(true);
+        out += '}';
+        pos.undo_move(m);
+        accumulators.pop();
+    };
+
     const int lineSize = int(moves.size());
     int       root     = 0;
 
@@ -474,13 +526,9 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
         (((out += '[') += std::to_string(pos.non_pawn_material(WHITE))) += ',') +=
           std::to_string(pos.non_pawn_material(BLACK));
         out += ']';
-        append_key(out, "checkers");
-        append_hex(out, pos.checkers());
+        append_cached_bitboards(out, pos);
         append_key(out, "captured");
-        if (st->capturedPiece)
-            append_string(out, std::string(1, PieceToChar[st->capturedPiece]));
-        else
-            out += "null";
+        appendCaptured();
 
         // Repetition and rule50 bookkeeping, the ply being counted from the
         // root of the current search as in the search itself
@@ -504,7 +552,8 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
         else
             out += "null";
 
-        // A null move, as in null move pruning: no accumulator is pushed
+        // A null move, as in null move pruning: no accumulator is pushed. Then
+        // a reply to it, as the null move search does.
         append_key(out, "null");
         if (evaluate && !pos.checkers())
         {
@@ -515,8 +564,19 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
             append_hex(out, pos.key());
             append_key(out, "fen");
             append_string(out, pos.fen());
+            append_key(out, "plies_from_null");
+            out += std::to_string(pos.state()->pliesFromNull);
+            append_key(out, "repetition");
+            out += std::to_string(pos.state()->repetition);
+            append_key(out, "captured");
+            appendCaptured();
             append_key(out, "nnue");
             appendNnue(true);
+            append_key(out, "reply");
+            if (Move reply = probe_move(pos, ply))
+                appendChild(reply);
+            else
+                out += "null";
             out += '}';
             pos.undo_null_move();
         }
@@ -525,23 +585,9 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
 
         // A move on the side, made and undone as search does with its children
         append_key(out, "probe");
-        if (Move probe = evaluate ? probe_move(pos, ply) : Move::none())
-        {
-            StateInfo probeSt;
-            auto&     dirties = accumulators.push(pos);
-            pos.do_move(probe, probeSt, pos.gives_check(probe), dirties);
-            out += '{';
-            append_key(out, "move");
-            appendMove(probe);
-            append_keys(out, pos);
-            append_key(out, "checkers");
-            append_hex(out, pos.checkers());
-            append_key(out, "nnue");
-            appendNnue(true);
-            out += '}';
-            pos.undo_move(probe);
-            accumulators.pop();
-        }
+        const Move next = ply < lineSize ? moves[ply] : Move::none();
+        if (Move probe = evaluate ? probe_move(pos, ply, next) : Move::none())
+            appendChild(probe);
         else
             out += "null";
 
@@ -558,7 +604,7 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
     // Walk back down the line. The positions of the current search window are
     // evaluated on the way, which reuses the accumulators computed on the way
     // up, including those computed backwards after a refresh.
-    std::string keys, nnues;
+    std::string keys, fens, nnues;
 
     for (int ply = lineSize; ply > 0; --ply)
     {
@@ -569,6 +615,8 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
 
         keys += keys.empty() ? '[' : ',';
         append_hex(keys, pos.key());
+        fens += fens.empty() ? '[' : ',';
+        append_string(fens, pos.fen());
         nnues += nnues.empty() ? '[' : ',';
         if (inWindow && !pos.checkers())
             nnues += std::to_string(network.evaluate(pos, accumulators, caches));
@@ -581,6 +629,8 @@ void LineDumper::dump(const std::string& line, bool isChess960, std::string& out
     out += std::to_string(lineSize);
     append_key(out, "keys");
     out += keys.empty() ? "[]" : keys + ']';
+    append_key(out, "fens");
+    out += fens.empty() ? "[]" : fens + ']';
     append_key(out, "nnues");
     out += nnues.empty() ? "[]" : nnues + ']';
     append_key(out, "fen");

@@ -48,9 +48,6 @@ PER_MOVE_FIELDS = ("see", "gives_check", "key_after")
 # Stands for a member an object does not have, which is not the same as null
 MISSING = object()
 
-# The records of 'dumpline' that start the dump of a line: its first position,
-# or the error that replaces the whole dump
-LINE_STARTS = (b'{"ply":0,', b'{"error"')
 
 
 @contextlib.contextmanager
@@ -126,8 +123,8 @@ def dump_lines(corpus, chess960, lines_mode=False):
     """Runs the engine over a corpus and yields an iterator on its dump lines.
 
     The iterator ends the program if the engine does not print exactly one line
-    per position of the corpus or, with lines_mode, does not start the dump of
-    exactly one line of play per line of the corpus.
+    per position of the corpus. With lines_mode the number of records depends on
+    the lines; the callers check them against the corpus with line_groups().
     """
     exe = os.environ.get("EXE", str(DEFAULT_EXE))
     prefix = shlex.split(os.environ.get("RUN_PREFIX", ""))
@@ -157,12 +154,12 @@ def dump_lines(corpus, chess960, lines_mode=False):
             # Everything else on stdout is the banner and UCI info strings
             for line in proc.stdout:
                 if line.startswith(b"{"):
-                    count += not lines_mode or line.startswith(LINE_STARTS)
+                    count += 1
                     yield line
             proc.stdout.close()
             if proc.wait() != 0:
                 sys.exit(f"{exe} exited with status {proc.returncode}")
-            if count != expected:
+            if not lines_mode and count != expected:
                 what = "lines of play" if lines_mode else "dump lines"
                 units = "lines" if lines_mode else "positions"
                 sys.exit(f"{exe} printed {count} {what} for the {expected} {units} of {corpus}")
@@ -171,18 +168,36 @@ def dump_lines(corpus, chess960, lines_mode=False):
 
 
 def cmd_generate(args):
-    count, starts, digest = 0, 0, hashlib.sha256()
-    with dump_lines(args.corpus, args.chess960, args.lines) as lines, open_output(args.golden) as out:
+    if args.lines:
+        cmd_generate_lines(args)
+        return
+
+    count, digest = 0, hashlib.sha256()
+    with dump_lines(args.corpus, args.chess960) as lines, open_output(args.golden) as out:
         for line in lines:
             if line.startswith(b'{"error"'):
-                what = "line" if args.lines else "position"
-                sys.exit(f"the engine rejects a {what} of the corpus: {line.decode().strip()}")
+                sys.exit(f"the engine rejects a position of the corpus: {line.decode().strip()}")
             out.write(line)
             digest.update(line)
             count += 1
-            starts += line.startswith(LINE_STARTS)
-    what = f"{starts} lines, {count} records" if args.lines else f"{count} positions"
-    print(f"{args.golden}: {what}, sha256 of the content {digest.hexdigest()}")
+    print(f"{args.golden}: {count} positions, sha256 of the content {digest.hexdigest()}")
+
+
+def cmd_generate_lines(args):
+    number = count = 0
+    digest = hashlib.sha256()
+    with dump_lines(args.corpus, args.chess960, True) as lines, open_output(args.golden) as out:
+        for number, line, group in line_groups(args.corpus, lines, "the engine"):
+            if "error" in group[0][1]:
+                sys.exit(f"the engine rejects line {number} of the corpus: {group[0][0].decode().strip()}")
+            problem = check_structure(line, group)
+            if problem:
+                sys.exit(f"the engine printed a malformed dump of line {number}: {problem}")
+            for record, _ in group:
+                out.write(record)
+                digest.update(record)
+                count += 1
+    print(f"{args.golden}: {number} lines, {count} records, sha256 of the content {digest.hexdigest()}")
 
 
 def describe(field, expected, actual, moves):
@@ -256,23 +271,84 @@ def cmd_verify(args):
     print(f"OK {args.corpus}: {count} positions match ({what})")
 
 
-def group_lines(records):
-    """Groups the records of 'dumpline' by line of play."""
+def parse_record(line):
+    try:
+        record = json.loads(line)
+    except ValueError:
+        record = None
+    if not isinstance(record, dict):
+        record = {"error": "not a JSON object: " + line.decode(errors="replace").strip()}
+    return record
+
+
+def is_line_start(record):
+    """Tells whether a record of 'dumpline' starts the dump of a line: its first
+    position, or the error that replaces the whole dump."""
+    return record.get("ply") == 0 or ("error" in record and "ply" not in record and "undo" not in record)
+
+
+def group_records(records):
+    """Groups the records of 'dumpline' by line of play, as (bytes, object) pairs."""
     group = []
-    for record in records:
-        if record.startswith(LINE_STARTS) and group:
+    for line in records:
+        record = parse_record(line)
+        if is_line_start(record) and group:
             yield group
             group = []
-        group.append(record)
+        group.append((line, record))
     if group:
         yield group
 
 
-def parse_record(line):
-    try:
-        return json.loads(line)
-    except ValueError:
-        return {"error": "not JSON: " + line.decode(errors="replace").strip()}
+def corpus_lines(corpus):
+    """Yields the lines of play of a corpus, skipping blank lines as the engine does."""
+    with open_read(corpus) as src:
+        for line in src:
+            if line.strip():
+                yield line.decode().strip()
+
+
+def line_groups(corpus, records, source):
+    """Pairs each line of a corpus with its group of records, numbered from 1.
+
+    Ends the program if there are more or fewer groups than lines.
+    """
+    number = 0
+    for number, (line, group) in enumerate(itertools.zip_longest(corpus_lines(corpus), group_records(records)), 1):
+        if line is None or group is None:
+            which = "more" if line is None else "fewer"
+            sys.exit(f"{source} gives {which} dumps of lines than there are lines in {corpus} (at line {number})")
+        yield number, line, group
+
+
+def count_moves(line):
+    """Number of moves of a line of play, as the engine reads it."""
+    tokens = line.split()
+    return len(tokens) - tokens.index("moves") - 1 if "moves" in tokens else 0
+
+
+def check_structure(line, group):
+    """Returns what is wrong with the records of a line of play, or None.
+
+    A line of n moves gives the records of plies 0 to n, then a walk back over n
+    moves; or a single error record.
+    """
+    records = [record for _, record in group]
+    if len(records) == 1 and "error" in records[0]:
+        return None
+    moves = count_moves(line)
+    if len(records) != moves + 2:
+        return f"expected {moves + 2} records for {moves} moves, got {len(records)}"
+    for ply, record in enumerate(records[:-1]):
+        if record.get("ply") != ply:
+            return f"record {ply} is not the position at ply {ply}"
+    undo = records[-1]
+    if undo.get("undo") != moves:
+        return f"the last record is not the walk back over {moves} moves"
+    for member in ("keys", "fens", "nnues"):
+        if not isinstance(undo.get(member), list) or len(undo[member]) != moves:
+            return f"the walk back does not give {moves} entries in {member}"
+    return None
 
 
 def where(record, line_number):
@@ -288,40 +364,43 @@ def where(record, line_number):
 def cmd_verify_lines(args):
     fields = args.fields.split(",") if args.fields else None
     known = set()
-    num_lines = num_records = failed_records = 0
-    failed_lines = 0
+    number = num_records = failed_records = failed_lines = reported = 0
     by_field = {}
-    reported = 0
+
+    def count(field):
+        by_field[field] = by_field.get(field, 0) + 1
 
     with dump_lines(args.corpus, args.chess960, True) as lines, open_read(args.golden) as golden:
-        for expected_group, actual_group in itertools.zip_longest(group_lines(golden), group_lines(lines)):
-            if expected_group is None or actual_group is None:
-                which = "fewer" if expected_group is None else "more"
-                sys.exit(f"{args.golden} holds {which} lines than {args.corpus}")
-            num_lines += 1
-            line_failed = False
+        actual_groups = line_groups(args.corpus, lines, "the engine")
+        for (number, line, expected_group), (_, _, actual_group) in zip(
+            line_groups(args.corpus, golden, args.golden), actual_groups
+        ):
+            problem = check_structure(line, expected_group)
+            if problem:
+                sys.exit(f"{args.golden} is damaged at line {number}: {problem}")
 
-            if len(expected_group) != len(actual_group):
+            line_failed = False
+            problem = check_structure(line, actual_group)
+            if problem:
                 line_failed = True
-                by_field["(number of records)"] = by_field.get("(number of records)", 0) + 1
+                count("(structure)")
                 if reported < args.max_report:
                     reported += 1
-                    print(where(json.loads(expected_group[0]), num_lines))
-                    print(f"  expected {len(expected_group)} records, got {len(actual_group)}")
+                    print(where(expected_group[0][1], number))
+                    print(f"  {problem}")
 
-            for expected_line, actual_line in itertools.zip_longest(expected_group, actual_group):
-                if expected_line is None:
+            for expected_pair, actual_pair in itertools.zip_longest(expected_group, actual_group):
+                if expected_pair is None:
                     break
                 num_records += 1
-                if actual_line is None:
+                if actual_pair is None:
                     failed_records += 1
                     continue
-                if fields is None and expected_line == actual_line:
+                if fields is None and expected_pair[0] == actual_pair[0]:
                     continue
 
-                expected = json.loads(expected_line)
+                expected, actual = expected_pair[1], actual_pair[1]
                 known.update(expected)
-                actual = parse_record(actual_line)
                 names = fields if fields is not None else sorted(set(expected) | set(actual))
                 differing = [f for f in names if expected.get(f, MISSING) != actual.get(f, MISSING)]
                 if not differing:
@@ -330,13 +409,17 @@ def cmd_verify_lines(args):
                 failed_records += 1
                 line_failed = True
                 for field in differing:
-                    by_field[field] = by_field.get(field, 0) + 1
+                    count(field)
                 if reported < args.max_report:
                     reported += 1
-                    print(where(expected, num_lines))
+                    print(where(expected, number))
                     for field in differing:
                         print("  " + describe(field, expected.get(field, MISSING), actual.get(field, MISSING), []))
             failed_lines += line_failed
+
+        # The engine must not print more than the corpus asks for
+        for _ in actual_groups:
+            pass
 
     # A misspelt field would otherwise compare equal everywhere
     unknown = [f for f in fields or [] if f not in known]
@@ -347,12 +430,12 @@ def cmd_verify_lines(args):
     if failed_lines:
         print(
             f"FAILED {args.corpus}: {failed_records} of {num_records} records differ, "
-            f"in {failed_lines} of {num_lines} lines ({what})"
+            f"in {failed_lines} of {number} lines ({what})"
         )
         for field, n in sorted(by_field.items(), key=lambda item: -item[1]):
             print(f"  {field:20} {n:8}")
         sys.exit(1)
-    print(f"OK {args.corpus}: {num_lines} lines, {num_records} records match ({what})")
+    print(f"OK {args.corpus}: {number} lines, {num_records} records match ({what})")
 
 
 def cmd_canonicalize(args):
@@ -384,16 +467,36 @@ def cmd_canonicalize(args):
 def cmd_sample(args):
     # Keep the positions (or lines) with the smallest hashes: a uniform sample
     # that does not depend on the order of the corpus, in corpus order.
-    with open_read(args.corpus) as corpus:
-        hashes = sorted(
-            (hashlib.blake2b(fen.strip(), digest_size=8).digest(), n) for n, fen in enumerate(corpus)
-        )
+    if args.lines:
+        units = list(enumerate(corpus_lines(args.corpus)))
+    else:
+        with open_read(args.corpus) as corpus:
+            units = list(enumerate(fen.decode().strip() for fen in corpus))
+    hashes = sorted((hashlib.blake2b(text.encode(), digest_size=8).digest(), n) for n, text in units)
     keep = {n for _, n in hashes[: args.count]}
+    del units
 
-    for source, target in ((args.corpus, args.out_corpus), (args.golden, args.out_golden)):
-        with open_read(source) as src:
-            units = group_lines(src) if args.lines and source == args.golden else ([line] for line in src)
-            content = b"".join(b"".join(unit) for n, unit in enumerate(units) if n in keep)
+    def golden_units():
+        with open_read(args.golden) as src:
+            if not args.lines:
+                yield from ([line] for line in src)
+                return
+            # Every line of the corpus must have its complete dump
+            for number, line, group in line_groups(args.corpus, src, args.golden):
+                problem = check_structure(line, group)
+                if problem:
+                    sys.exit(f"{args.golden} is damaged at line {number}: {problem}")
+                yield [record for record, _ in group]
+
+    def corpus_units():
+        if args.lines:
+            yield from ([line.encode() + b"\n"] for line in corpus_lines(args.corpus))
+        else:
+            with open_read(args.corpus) as src:
+                yield from ([line] for line in src)
+
+    for units_of, target in ((corpus_units, args.out_corpus), (golden_units, args.out_golden)):
+        content = b"".join(b"".join(unit) for n, unit in enumerate(units_of()) if n in keep)
         if os.path.exists(target):
             with open_read(target) as old:
                 if old.read() == content:
