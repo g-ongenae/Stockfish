@@ -157,6 +157,8 @@ void UCIEngine::loop() {
             engine.trace_eval();
         else if (token == "dump")
             dump(is);
+        else if (token == "dumpline")
+            dump_line(is);
         else if (token == "compiler")
             sync_cout << compiler_info() << sync_endl;
         else if (token == "export_net")
@@ -505,6 +507,24 @@ void UCIEngine::dump(std::istream& args) {
         engine.dump_position();
     else if (!engine.dump_positions(path_from_utf8(filename)))
         terminate_on_critical_error("Unable to open file " + filename);
+}
+
+// Prints the engine internals along a line of play, one line of JSON per
+// position of the line, as maintained incrementally by the moves:
+//
+// dumpline startpos moves e2e4 ...  : dump the given line
+// dumpline fen <fen> moves e2e4 ... : dump the given line
+// dumpline blah                     : dump each line of file "blah", one per line
+void UCIEngine::dump_line(std::istream& args) {
+    std::string rest, first;
+
+    std::getline(args >> std::ws, rest);
+    std::istringstream(rest) >> first;
+
+    if (first.empty() || first == "startpos" || first == "fen")
+        engine.dump_line(rest);
+    else if (!engine.dump_lines(path_from_utf8(first)))
+        terminate_on_critical_error("Unable to read file " + first);
 }
 
 void UCIEngine::position(std::istringstream& is) {

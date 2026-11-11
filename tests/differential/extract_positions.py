@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Extract a sample of distinct positions from a PGN stream.
+"""Extract a sample of distinct positions, or of game lines, from a PGN stream.
 
 Reads PGN (Lichess database format) on stdin and writes one FEN per line on
-stdout. Games are replayed with python-chess and each position reached is kept
+stdout, or with --lines one line of play per line (see below). Games are replayed with python-chess and each position reached is kept
 with a probability that depends on what makes it interesting: positions that are
 rare but awkward for a chess engine (en passant, promotions, double checks,
 unusual castling rights, few pieces, game ends) are kept far more often than
@@ -15,6 +15,16 @@ Positions are deduplicated on piece placement, side to move, castling rights and
 en passant square; the first occurrence provides the move counters.
 
     zstdcat lichess_db_standard_rated_2013-01.pgn.zst | extract_positions.py > out.fen
+
+With --lines, whole games are kept instead, as the arguments of the UCI
+'position' command: "startpos moves e2e4 ..." or "fen <FEN> moves ...". A game
+is kept with a probability that depends on what it plays along the way
+(castling, en passant, promotions, repetitions, long stretches without a capture
+or pawn move, length), again decided by a hash of the game itself. One kept game
+in four starts from a position in its course instead of its start, given by its
+FEN with the counters of the game.
+
+    zstdcat lichess_db_standard_rated_2013-01.pgn.zst | extract_positions.py --lines > out.lines
 
 Requires python-chess (pip install chess).
 """
@@ -46,6 +56,29 @@ RATES = {
 }
 
 CATEGORIES = tuple(RATES)
+
+# Probability of keeping a game with --lines, by what happens in it. A game gets
+# the highest rate among the categories it belongs to. Chosen from the category
+# frequencies in the two dumps (see --count), for about 430,000 plies in all.
+LINE_RATES = {
+    "base": 0.01,  # any game
+    "castling_queenside": 0.02,  # a queenside castling move
+    "en_passant": 0.1,  # an en passant capture
+    "promotion": 0.04,  # a promotion
+    "underpromotion": 0.4,  # a promotion to a knight, bishop or rook
+    "repetition": 0.04,  # a position occurs twice
+    "threefold": 0.12,  # ... three times
+    "rule50_40": 0.3,  # 40 plies without a capture or pawn move
+    "rule50_80": 1.0,  # 80 plies, close to the fifty-move limit
+    "long": 0.4,  # 200 plies or more
+    "very_long": 1.0,  # 300 plies or more
+}
+
+# The Chess960 dump is about six times smaller, and its castling moves are the
+# interesting ones: its games are kept three times as often (at most always).
+LINE_RATE_SCALE_CHESS960 = 3
+
+LINE_CATEGORIES = tuple(LINE_RATES)
 
 # Castling rights as python-chess bitboards of rook squares
 COMMON_CASTLING = {
@@ -172,11 +205,146 @@ def replay(game):
     return selected, False
 
 
+def line_categories(moves_info, plies, max_rule50, max_occurrences):
+    """Returns the names of the categories a game belongs to."""
+    found = ["base"]
+    found += sorted(moves_info)
+    if max_occurrences >= 2:
+        found.append("repetition")
+        if max_occurrences >= 3:
+            found.append("threefold")
+    if max_rule50 >= 40:
+        found.append("rule50_40")
+        if max_rule50 >= 80:
+            found.append("rule50_80")
+    if plies >= 200:
+        found.append("long")
+        if plies >= 300:
+            found.append("very_long")
+    return found
+
+
+def start_fen(board, chess960):
+    return board.shredder_fen(en_passant="legal") if chess960 else board.fen(en_passant="legal")
+
+
+def replay_line(game):
+    """Replays one game and returns (line or None, categories, error flag).
+
+    A game with an unreadable move is kept up to that move.
+    """
+    pgn_fen, movetext, chess960, count_only = game
+    try:
+        board = chess.Board(pgn_fen, chess960=chess960) if pgn_fen else chess.Board(chess960=chess960)
+    except ValueError:
+        return None, [], True
+
+    tokens = [t for t in NOISE.sub(" ", movetext).split() if t not in RESULTS]
+    start = start_fen(board, chess960) if pgn_fen else None
+    moves, kinds = [], set()
+    occurrences = {board._transposition_key(): 1}
+    max_occurrences = 1
+    max_rule50 = 0
+    error = False
+
+    for san in tokens:
+        try:
+            move = board.parse_san(san)
+        except ValueError:
+            error = True
+            break
+        if board.is_castling(move) and board.is_queenside_castling(move):
+            kinds.add("castling_queenside")
+        if board.is_en_passant(move):
+            kinds.add("en_passant")
+        if move.promotion:
+            kinds.add("promotion" if move.promotion == chess.QUEEN else "underpromotion")
+        moves.append(board.uci(move))
+        board.push(move)
+        key = board._transposition_key()
+        occurrences[key] = occurrences.get(key, 0) + 1
+        max_occurrences = max(max_occurrences, occurrences[key])
+        max_rule50 = max(max_rule50, board.halfmove_clock)
+
+    if not moves:
+        return None, [], error
+
+    found = line_categories(kinds, len(moves), max_rule50, max_occurrences)
+    if count_only:
+        return len(moves), found, error
+
+    digest = hashlib.blake2b(((start or "") + " " + " ".join(moves)).encode(), digest_size=8).digest()
+    value = int.from_bytes(digest, "little")
+    scale = LINE_RATE_SCALE_CHESS960 if chess960 else 1
+    if value >= min(1.0, scale * max(LINE_RATES[c] for c in found)) * SCALE:
+        return None, found, error
+
+    # One line in four starts in the course of the game, at a ply given by
+    # another part of the hash
+    begin = 0
+    if (value & 3) == 0 and len(moves) > 1:
+        begin = 1 + (value >> 2) % (len(moves) - 1)
+        board = chess.Board(pgn_fen, chess960=chess960) if pgn_fen else chess.Board(chess960=chess960)
+        for uci in moves[:begin]:
+            board.push(board.parse_uci(uci))
+        start = start_fen(board, chess960)
+
+    head = f"fen {start}" if start else "startpos"
+    return f"{head} moves {' '.join(moves[begin:])}", found, error
+
+
+def main_lines(args, games):
+    """The --lines mode of main()."""
+    seen = set()
+    counts = dict.fromkeys(LINE_CATEGORIES, 0)
+    plies = dict.fromkeys(LINE_CATEGORIES, 0)
+    num_games = num_errors = num_duplicates = num_lines = num_plies = 0
+
+    with multiprocessing.Pool(args.jobs) as pool:
+        # imap() keeps the order of the games, hence the output is deterministic
+        for line, found, error in pool.imap(replay_line, games(), chunksize=200):
+            num_games += 1
+            num_errors += error
+            if args.count:
+                # Frequencies over all the games, to choose the rates
+                if line:
+                    for category in found:
+                        counts[category] += 1
+                        plies[category] += line
+                continue
+            if not line:
+                continue
+            digest = hashlib.blake2b(line.encode(), digest_size=8).digest()
+            if digest in seen:
+                num_duplicates += 1
+                continue
+            seen.add(digest)
+            num_lines += 1
+            length = len(line.split(" moves ", 1)[1].split()) if " moves " in line else 0
+            num_plies += length
+            for category in found:
+                counts[category] += 1
+                plies[category] += length
+            sys.stdout.write(line + "\n")
+
+    print(
+        f"{num_games} games ({num_errors} cut short by an unreadable move), "
+        f"{num_lines} lines kept with {num_plies} plies, {num_duplicates} duplicates dropped",
+        file=sys.stderr,
+    )
+    for category in LINE_CATEGORIES:
+        print(f"  {category:18} {counts[category]:8} lines {plies[category]:9} plies", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--chess960", action="store_true", help="games are Chess960 games")
     parser.add_argument("--max-games", type=int, default=0, help="stop after that many games")
     parser.add_argument("--jobs", type=int, default=2, help="number of worker processes")
+    parser.add_argument("--lines", action="store_true", help="keep whole games as lines of play")
+    parser.add_argument(
+        "--count", action="store_true", help="with --lines, only count the games and plies of each category"
+    )
     args = parser.parse_args()
 
     def games():
@@ -184,7 +352,14 @@ def main():
         for n, (fen, movetext) in enumerate(read_games(stream)):
             if args.max_games and n >= args.max_games:
                 break
-            yield fen, movetext, args.chess960
+            if args.lines:
+                yield fen, movetext, args.chess960, args.count
+            else:
+                yield fen, movetext, args.chess960
+
+    if args.lines:
+        main_lines(args, games)
+        return
 
     seen = set()
     counts = dict.fromkeys(CATEGORIES, 0)
