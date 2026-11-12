@@ -1,11 +1,13 @@
 //! The part of `src/uci.cpp` this port needs: the command loop with
-//! `setoption`, `position`, `go perft`, `dump` and `quit`, and the UCI
-//! notation of moves.
+//! `setoption`, `position`, `go perft`, `dump`, `dumpline` and `quit`, and the
+//! UCI notation of moves.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 
-use crate::dump::PositionDumper;
+use crate::dump::{LineDumper, PositionDumper};
+use crate::nnue::network::EVAL_FILE_DEFAULT_NAME;
+use crate::nnue::Network;
 use crate::movegen::MoveList;
 use crate::perft::perft_fen;
 use crate::position::{square_to_string, Position};
@@ -93,6 +95,9 @@ pub struct UciEngine {
     pos: Position,
     chess960: bool,
     current_cmd: Vec<u8>,
+    /// The `EvalFile` option, and the network read from it, loaded on first use.
+    eval_file: Vec<u8>,
+    network: Option<(Vec<u8>, Network)>,
 }
 
 impl Default for UciEngine {
@@ -105,7 +110,13 @@ impl UciEngine {
     pub fn new() -> UciEngine {
         let mut pos = Position::new();
         pos.set(START_FEN.as_bytes(), false).expect("start position");
-        UciEngine { pos, chess960: false, current_cmd: Vec::new() }
+        UciEngine {
+            pos,
+            chess960: false,
+            current_cmd: Vec::new(),
+            eval_file: EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec(),
+            network: None,
+        }
     }
 
     fn terminate_on_critical_error(&self, message: &[u8]) -> ! {
@@ -158,6 +169,7 @@ impl UciEngine {
             b"quit" | b"stop" => return token != b"quit",
             b"uci" => {
                 let _ = writeln!(out, "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n");
+                let _ = writeln!(out, "option name EvalFile type string default {EVAL_FILE_DEFAULT_NAME}");
                 let _ = writeln!(out, "option name UCI_Chess960 type check default false");
                 let _ = writeln!(out, "uciok");
             }
@@ -180,6 +192,12 @@ impl UciEngine {
             b"dump" => {
                 drop(out);
                 self.dump(tokens.next());
+            }
+            b"dumpline" => {
+                drop(out);
+                // std::getline(args >> std::ws, rest)
+                let start = tokens.rest.iter().position(|&c| !is_c_space(c)).unwrap_or(tokens.rest.len());
+                self.dump_line(&tokens.rest[start..]);
             }
             b"d" => {
                 let _ = writeln!(out, "\nFen: {}\nKey: {:016X}", self.pos.fen(), self.pos.key());
@@ -215,7 +233,9 @@ impl UciEngine {
             value.extend_from_slice(t);
         }
 
-        if name.eq_ignore_ascii_case(b"UCI_Chess960") {
+        if name.eq_ignore_ascii_case(b"EvalFile") {
+            self.eval_file = value;
+        } else if name.eq_ignore_ascii_case(b"UCI_Chess960") {
             // A check option only takes "true" or "false"
             if value == b"true" || value == b"false" {
                 self.chess960 = value == b"true";
@@ -300,23 +320,84 @@ impl UciEngine {
         }
     }
 
+    /// Loads the network of the `EvalFile` option if it is not loaded yet, or
+    /// terminates as C++ does when it cannot (`Engine::verify_network`). The
+    /// file is looked for as given (relative to the working directory), then
+    /// in the directory of the binary. It is read, not embedded in the binary.
+    fn verify_network(&mut self) -> &Network {
+        let mut path = self.eval_file.clone();
+        if path.is_empty() {
+            path = EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec();
+        }
+
+        if self.network.as_ref().map(|(p, _)| p) != Some(&path) {
+            self.network = None;
+            let mut dirs = vec![std::path::PathBuf::new()];
+            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+                dirs.push(dir);
+            }
+            for dir in dirs {
+                let Ok(file) = File::open(dir.join(path_from_bytes(&path))) else { continue };
+                if let Some(net) = Network::load(BufReader::with_capacity(1 << 16, file)) {
+                    self.network = Some((path.clone(), net));
+                    break;
+                }
+            }
+
+            let name = String::from_utf8_lossy(&path).into_owned();
+            let mut out = io::stdout().lock();
+            match &self.network {
+                Some((_, net)) => {
+                    let _ = writeln!(
+                        out,
+                        "info string NNUE evaluation using {name} ({}MiB, ({}, {}, {}, {}, 1))",
+                        net.reported_size_mib(),
+                        crate::nnue::feature_transformer::INPUT_DIMENSIONS,
+                        crate::nnue::L1,
+                        crate::nnue::L2,
+                        crate::nnue::L3
+                    );
+                }
+                None => {
+                    let msg = [
+                        "Network evaluation parameters compatible with the engine must be available.".to_string(),
+                        format!("The network file {name} was not loaded successfully."),
+                        "The UCI option EvalFile might need to specify the full path, including the directory name, to the network file.".to_string(),
+                        format!("The default net can be downloaded from: https://tests.stockfishchess.org/api/nn/{EVAL_FILE_DEFAULT_NAME}"),
+                        "The engine will be terminated now.".to_string(),
+                    ];
+                    for line in msg {
+                        let _ = writeln!(out, "info string ERROR: {line}");
+                    }
+                    let _ = out.flush();
+                    std::process::exit(1);
+                }
+            }
+        }
+        &self.network.as_ref().unwrap().1
+    }
+
     /// `dump`: the current position. `dump <file>`: each position of a file
     /// of FENs, one per line, blank lines skipped, streamed.
     fn dump(&mut self, filename: Option<&[u8]>) {
-        let mut dumper = PositionDumper::new();
+        // C++ opens the file before it verifies the network
+        let file = filename.map(|f| (f, File::open(path_from_bytes(f))));
+        if let Some((filename, Err(_))) = &file {
+            let mut msg = b"Unable to open file ".to_vec();
+            msg.extend_from_slice(filename);
+            self.terminate_on_critical_error(&msg);
+        }
+
+        self.verify_network();
+        let network = &self.network.as_ref().unwrap().1;
+        let mut dumper = PositionDumper::new(network);
         let mut buf = Vec::with_capacity(8192);
 
-        let Some(filename) = filename else {
+        let Some((_, Ok(file))) = file else {
             dumper.dump(self.pos.fen().as_bytes(), self.chess960, &mut buf);
             buf.push(b'\n');
             let _ = io::stdout().lock().write_all(&buf);
             return;
-        };
-
-        let Ok(file) = File::open(path_from_bytes(filename)) else {
-            let mut msg = b"Unable to open file ".to_vec();
-            msg.extend_from_slice(filename);
-            self.terminate_on_critical_error(&msg);
         };
 
         let stdout = io::stdout();
@@ -344,6 +425,72 @@ impl UciEngine {
             }
         }
         let _ = out.flush();
+    }
+}
+
+impl UciEngine {
+    /// `dumpline startpos|fen ... moves ...`: the given line of play.
+    /// `dumpline <file>`: each line of a file, one per line, blank lines
+    /// skipped, streamed.
+    fn dump_line(&mut self, rest: &[u8]) {
+        let first = Tokens { rest }.next().unwrap_or(b"");
+        let mut buf = Vec::with_capacity(1 << 16);
+
+        if first.is_empty() || first == b"startpos" || first == b"fen" {
+            self.verify_network();
+            let network = &self.network.as_ref().unwrap().1;
+            let mut dumper = LineDumper::new(network);
+            dumper.dump(rest, self.chess960, &mut buf);
+            let mut out = io::stdout().lock();
+            let _ = out.write_all(&buf);
+            let _ = out.flush();
+            return;
+        }
+
+        let Ok(file) = File::open(path_from_bytes(first)) else {
+            let mut msg = b"Unable to read file ".to_vec();
+            msg.extend_from_slice(first);
+            self.terminate_on_critical_error(&msg);
+        };
+
+        self.verify_network();
+        let network = &self.network.as_ref().unwrap().1;
+        let mut dumper = LineDumper::new(network);
+        let stdout = io::stdout();
+        let mut out = io::BufWriter::with_capacity(1 << 16, stdout.lock());
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        let mut read_error = false;
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Err(_) => {
+                    read_error = true;
+                    break;
+                }
+                Ok(_) => {}
+            }
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.iter().all(|&c| is_c_space(c)) {
+                continue;
+            }
+            buf.clear();
+            dumper.dump(&line, self.chess960, &mut buf);
+            if out.write_all(&buf).is_err() {
+                break;
+            }
+        }
+        let _ = out.flush();
+        drop(out);
+        // A read error must not pass for the end of the file
+        if read_error {
+            let mut msg = b"Unable to read file ".to_vec();
+            msg.extend_from_slice(first);
+            self.terminate_on_critical_error(&msg);
+        }
     }
 }
 
