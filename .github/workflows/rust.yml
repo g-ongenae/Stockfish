@@ -94,6 +94,12 @@ jobs:
       - name: cargo test --features magic32
         run: cargo test --release --locked --features magic32 --target-dir target/magic32
 
+      # nnue and eval need the network: the port looks for it in the working
+      # directory, rust/, from which the harness runs every target
+      - uses: ./.github/actions/nnue
+      - name: Network for the port
+        run: ln -sf ../src/nn-*.nnue . && ls -lL nn-*.nnue
+
       - name: Differential sample
         run: |
           . ./differential.env
@@ -242,6 +248,12 @@ jobs:
 
       - name: cargo test (emulated)
         run: cargo test --release --locked
+      # nnue and eval need the network: the port looks for it in the working
+      # directory, rust/, from which the harness runs every target
+      - uses: ./.github/actions/nnue
+      - name: Network for the port
+        run: ln -sf ../src/nn-*.nnue . && ls -lL nn-*.nnue
+
       - name: Differential sample (emulated)
         run: |
           . ./differential.env
