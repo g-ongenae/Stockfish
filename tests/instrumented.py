@@ -1103,6 +1103,223 @@ class TestDumpLineFile(metaclass=OrderedClassMembers):
         assert "CRITICAL ERROR" in self.stockfish.process.stdout
 
 
+def read_sessions(name, count):
+    """The first sessions of a set of the sample of the search trace, with their records."""
+    sample = PATH / "differential" / "sample"
+    with gzip.open(sample / f"{name}.trace.gz", "rt") as f:
+        sessions = [line.strip() for line in f if line.strip()][:count]
+    records = []
+    with gzip.open(sample / f"{name}.trace.jsonl.gz", "rt") as f:
+        for line in f:
+            record = json.loads(line)
+            if record["session"] > count:
+                break
+            records.append(record)
+    assert len(sessions) == count and records
+    return sessions, records
+
+
+class TestSearchTraceUCI(metaclass=OrderedClassMembers):
+    """The searches of the search trace, played through plain UCI to any build:
+    what it prints must be what the tracing binary recorded."""
+
+    def beforeAll(self):
+        self.stockfish = Stockfish()
+
+    def afterAll(self):
+        self.stockfish.quit()
+        assert self.stockfish.close() == 0
+
+    def afterEach(self):
+        assert postfix_check(self.stockfish.get_output()) == True
+        self.stockfish.clear_output()
+
+    def _play(self, name, count, chess960):
+        sessions, records = read_sessions(name, count)
+        # the options the trace fixes, see tests/differential/README.md
+        for option, value in (("Threads", "1"), ("Hash", "2"), ("MultiPV", "1"),
+                              ("UCI_Chess960", "true" if chess960 else "false")):
+            self.stockfish.setoption(option, value)
+
+        expected = iter(records)
+        for session in sessions:
+            self.stockfish.send_command("ucinewgame")
+            for command in (c.strip() for c in session.split(";")):
+                if command.startswith("position"):
+                    self.stockfish.send_command(command)
+                    continue
+                self.stockfish.send_command(command)
+                info = []
+                for line in self.stockfish.readline():
+                    if line.startswith("info depth") and " score " in line:
+                        info.append(re.sub(r" (nps|time) \d+", "", line[len("info "):]))
+                    elif line.startswith("bestmove"):
+                        break
+                record = next(expected)
+                assert info == record["info"]
+                assert line.split()[1] == record["bestmove"]
+        self.stockfish.setoption("UCI_Chess960", "false")
+
+    def test_golden_sample(self):
+        self._play("standard", 25, False)
+
+    def test_golden_sample_chess960(self):
+        self._play("chess960", 8, True)
+
+
+class TestSearchTrace(metaclass=OrderedClassMembers):
+    """The 'searchtrace' command of the tracing binary, built next to the binary
+    under test with 'make trace-build'. Skipped when there is none."""
+
+    def beforeAll(self):
+        self.path = os.path.join(os.path.dirname(get_path()), "stockfish-trace")
+        self.available = os.path.exists(self.path)
+
+    def beforeEach(self):
+        self.stockfish = None
+
+    def afterEach(self):
+        if self.stockfish:
+            assert postfix_check(self.stockfish.get_output()) == True
+            self.stockfish.clear_output()
+
+    def _trace(self, sessions, *options, chess960=False):
+        """Runs 'searchtrace' on sessions, returns the records and the other lines."""
+        with open("sessions.txt", "w") as f:
+            f.write("".join(s + "\n" for s in sessions))
+        self.stockfish = Engine(get_prefix(), self.path)
+        if chess960:
+            self.stockfish.setoption("UCI_Chess960", "true")
+        self.stockfish.send_command(" ".join(["searchtrace", "sessions.txt", *options]))
+        # the command runs in the UCI loop: once it is done, the next one is answered
+        self.stockfish.send_command("isready")
+        lines = []
+        for line in self.stockfish.readline():
+            if line == "readyok":
+                break
+            lines.append(line)
+        self.stockfish.quit()
+        assert self.stockfish.close() == 0
+        return [json.loads(l) for l in lines if l.startswith("{")], [l for l in lines if not l.startswith("{")]
+
+    def test_record(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        records, _ = self._trace(["position startpos moves e2e4 ; go depth 4 ; position startpos moves e2e4 e7e5 ; go nodes 500"])
+
+        assert [(r["session"], r["search"], r["go"]) for r in records] == [(1, 1, "depth 4"), (1, 2, "nodes 500")]
+        first, second = records
+        assert first["fen"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+        assert [it["depth"] for it in first["iterations"]] == [1, 2, 3, 4]
+        assert all(it["completed"] for it in first["iterations"])
+        assert first["info"][-1].startswith("depth 4 ") and first["nodes"] == first["iterations"][-1]["nodes"]
+        assert first["info"][-1].endswith(" pv " + first["iterations"][-1]["pv"])
+        assert first["bestmove"] == first["iterations"][-1]["pv"].split()[0]
+        # a node limit stops the last iteration before its end
+        assert second["nodes"] >= 500 and not second["iterations"][-1]["completed"]
+        # one checkpoint every 4096 events
+        for r in records:
+            assert len(r["checkpoints"]) == r["events"] // 4096
+        assert first["state"]["tt_generation"] == 1 and second["state"]["tt_generation"] == 2
+
+    def test_digest_of_the_events(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        records, lines = self._trace(["position startpos ; go depth 7"], "events", "1", "0", "1000000000")
+
+        # the digest is 64-bit FNV-1a over the events, each followed by a newline
+        events = [l.split(" ", 1) for l in lines if l[:1].isdigit()]
+        assert [int(i) for i, _ in events] == list(range(len(events)))
+        digest, checkpoints = 0xCBF29CE484222325, []
+        for n, (_, event) in enumerate(events, 1):
+            for byte in (event + "\n").encode():
+                digest = ((digest ^ byte) * 0x100000001B3) & (2**64 - 1)
+            if n % 4096 == 0:
+                checkpoints.append(f"{digest:016X}")
+        record = records[0]
+        assert record["events"] == len(events)
+        assert record["digest"] == f"{digest:016X}" and record["checkpoints"] == checkpoints
+        assert events[0][1].startswith("start generation=1 ")
+        assert sum(e.startswith("search ") for _, e in events) > 100
+        assert events[-1][1].startswith("iteration_end depth=7 completed=1 ")
+
+    def test_window_and_context(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        _, all_lines = self._trace(["position startpos ; go depth 6"], "events", "1", "0", "1000000000")
+        _, lines = self._trace(["position startpos ; go depth 6"], "events", "1", "3000", "3010")
+
+        events = [l for l in lines if l[:1].isdigit()]
+        assert events == [l for l in all_lines if l[:1].isdigit()][3000:3010]
+        # the nodes open at event 3000, from the root down
+        context = [l[len("context "):] for l in lines if l.startswith("context ")]
+        assert context[0].split(" ", 1)[1].startswith("search ply=0 ")
+        assert all(int(c.split()[0]) < 3000 for c in context)
+
+    def test_sessions_are_independent(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        a = "position startpos moves d2d4 ; go depth 6"
+        b = "position startpos moves d2d4 d7d5 ; go depth 6"
+        apart, _ = self._trace([a, b])
+        together, _ = self._trace([a + " ; " + b])
+
+        # each session starts from a cleared state ...
+        alone, _ = self._trace([b])
+        strip = lambda r: {k: v for k, v in r.items() if k != "session"}
+        assert strip(apart[1]) == strip(alone[0])
+        # ... and within a session the state is inherited
+        assert together[1]["search"] == 2
+        assert together[1]["state"]["tt_generation"] == 2
+        assert together[1]["digest"] != apart[1]["digest"]
+
+    def test_no_legal_move(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        records, _ = self._trace(["position fen R5k1/5ppp/8/8/8/8/8/4K3 b - - 0 1 ; go depth 3"])
+        assert records[0]["bestmove"] == "(none)" and records[0]["info"] == ["depth 0 score mate 0"]
+        assert records[0]["events"] == 0 and records[0]["nodes"] == 0
+        # no search ran: the low ply history is what an earlier search left
+        assert records[0]["state"]["low_ply_history"] is None
+
+    def test_errors(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        records, _ = self._trace([
+            "go depth 3",
+            "position startpos ; go movetime 100",
+            "position startpos moves e2e5 ; go depth 1",
+            "position startpos ; go depth 1",
+        ])
+        assert [r["session"] for r in records] == [1, 2, 3, 4]
+        assert records[0]["error"] == "go before any position"
+        assert records[1]["error"] == "Only 'go depth N' and 'go nodes N' are allowed"
+        assert "error" in records[2] and records[2]["search"] == 1
+        assert records[3]["bestmove"] != "(none)"
+
+    def test_golden_sample(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        sessions, expected = read_sessions("standard", 15)
+        records, _ = self._trace(sessions)
+        assert records == expected
+
+    def test_golden_sample_chess960(self):
+        if not self.available:
+            print("no stockfish-trace next to the binary, skipped")
+            return
+        sessions, expected = read_sessions("chess960", 5)
+        records, _ = self._trace(sessions, chess960=True)
+        assert records == expected
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Stockfish with testing options")
     parser.add_argument("--valgrind", action="store_true", help="Run valgrind testing")
@@ -1148,6 +1365,8 @@ if __name__ == "__main__":
             TestDumpFile,
             TestDumpLine,
             TestDumpLineFile,
+            TestSearchTraceUCI,
+            TestSearchTrace,
         ]
     )
 

@@ -37,6 +37,7 @@
 #include "numa.h"
 #include "position.h"
 #include "score.h"
+#include "searchtrace.h"
 #include "syzygy/tbprobe.h"
 #include "timeman.h"
 #include "types.h"
@@ -338,6 +339,11 @@ class Worker {
     SharedHistories& sharedHistory;
     ContinuationHistory (&continuationHistory)[2][2];
 
+#ifdef SEARCH_TRACE
+    // Receives the events of the search when set, see searchtrace.h
+    SearchTracer* tracer = nullptr;
+#endif
+
    private:
     bool iterative_deepening();
 
@@ -360,6 +366,16 @@ class Worker {
     // Quiescence search function, which is called by the main search
     template<NodeType nodeType>
     Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);
+
+#ifdef SEARCH_TRACE
+    // In the tracing binary search() and qsearch() record the entry and the
+    // result of each node around these, which do the work
+    template<NodeType nodeType>
+    Value
+    search_node(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, const bool cutNode);
+    template<NodeType nodeType>
+    Value qsearch_node(Position& pos, Stack* ss, Value alpha, Value beta);
+#endif
 
     int reduction(bool i, Depth d, int mn) const;
 
@@ -409,6 +425,9 @@ class Worker {
 
     friend class Stockfish::ThreadPool;
     friend class SearchManager;
+#ifdef SEARCH_TRACE
+    friend class Stockfish::SearchTracer;
+#endif
 };
 
 struct ConthistBonus {

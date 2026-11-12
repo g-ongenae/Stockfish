@@ -351,6 +351,36 @@ dispatch:
     }
 }
 
+#ifdef SEARCH_TRACE
+// The TT move is returned from the TT stage, which hands over to the first
+// stage; every other move is returned by select(), past which 'cur' has moved.
+bool MovePicker::trace_is_tt_move() const { return stage == INIT_FIRST_STAGE; }
+
+const char* MovePicker::trace_stage() const {
+    switch (stage)
+    {
+    case INIT_FIRST_STAGE :
+        return "tt";
+    case GOOD_CAPTURE :
+        return "good_capture";
+    case GOOD_QUIET :
+        return "good_quiet";
+    case BAD_MOVES :
+        return "bad";
+    case QSEARCH :
+        return "qsearch";
+    case EVASION :
+        return "evasion";
+    case PROBCUT :
+        return "probcut";
+    default :
+        return "?";
+    }
+}
+
+int MovePicker::trace_score() const { return (cur - 1)->value; }
+#endif
+
 void MovePicker::skip_quiet_moves() {
     skipQuiets = true;
     if (stage == BAD_MOVES || stage == GOOD_QUIET)
