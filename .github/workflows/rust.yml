@@ -1,0 +1,262 @@
+# CI of the Rust port (rust/): build, unit tests, the differential sample of
+# tests/differential on the members rust/differential.env lists, and perft,
+# natively on x86-64 and under user-mode emulation on weak or unusual targets.
+# Emulation proves correctness on the target's instruction set, word size and
+# byte order; it says nothing about speed on real hardware.
+name: "Fork: Rust port"
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "rust/**"
+      - "tests/differential/**"
+      - ".github/workflows/rust.yml"
+      - ".github/actions/**"
+      - ".github/ci/**"
+  pull_request:
+    branches: [master]
+    paths:
+      - "rust/**"
+      - "tests/differential/**"
+      - ".github/workflows/rust.yml"
+      - ".github/actions/**"
+      - ".github/ci/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so that a new release cannot turn CI red by itself; the version of
+  # the development machine.
+  RUSTUP_TOOLCHAIN: 1.85.1
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  lint:
+    name: Format and lints
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install $RUSTUP_TOOLCHAIN --profile minimal --component rustfmt,clippy
+      # Known failure: the crate has never been formatted with rustfmt's
+      # defaults (77 differences at the time this job was added). The step
+      # reports them without failing the job until the crate is formatted,
+      # or given a rustfmt.toml, in a PR of its own; then drop the next line.
+      - name: cargo fmt --check (known failure, not gating)
+        continue-on-error: true
+        run: cargo fmt --check
+      # Known failure as well: clippy stops at a needless_lifetimes lint in
+      # src/position.rs, and may find more behind it. Drop the
+      # continue-on-error lines once the crate is clean.
+      - name: cargo clippy (known failure, not gating)
+        if: always()
+        continue-on-error: true
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: cargo clippy --features magic32 (known failure, not gating)
+        if: always()
+        continue-on-error: true
+        run: cargo clippy --all-targets --locked --features magic32 -- -D warnings
+
+  native:
+    name: x86-64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install $RUSTUP_TOOLCHAIN --profile minimal
+      - name: Members checked
+        run: cat differential.env
+
+      - name: Build
+        run: cargo build --release --locked
+      - name: cargo test
+        run: cargo test --release --locked
+      # in a target directory of its own: in target/ it would replace the
+      # default binary, which the steps below check
+      - name: cargo test --features magic32
+        run: cargo test --release --locked --features magic32 --target-dir target/magic32
+
+      - name: Differential sample
+        run: |
+          . ./differential.env
+          test -n "$DUMP_FIELDS"
+          EXE=$PWD/target/release/stockfish ../.github/ci/verify-sample.sh sample --fields "$DUMP_FIELDS"
+      - name: Differential sample (lines of play)
+        run: |
+          . ./differential.env
+          if [ -z "$DUMPLINE_FIELDS" ]; then
+            echo "::notice::dumpline is not ported yet (DUMPLINE_FIELDS is empty in rust/differential.env): skipped"
+            exit 0
+          fi
+          EXE=$PWD/target/release/stockfish ../.github/ci/verify-sample.sh lines --fields "$DUMPLINE_FIELDS"
+      - name: Perft, full depths of tests/perft.sh
+        run: |
+          command -v bc || { sudo apt-get update && sudo apt-get install -y bc; }
+          ./perft.sh target/release/stockfish
+
+      # the 32-bit magic index arithmetic, on the harness and perft too
+      - name: Build with magic32
+        run: cargo build --release --locked --features magic32 --target-dir target/magic32
+      - name: Differential sample with magic32
+        run: |
+          . ./differential.env
+          EXE=$PWD/target/magic32/release/stockfish ../.github/ci/verify-sample.sh sample --fields "$DUMP_FIELDS"
+      - name: Perft with magic32, full depths
+        run: ./perft.sh target/magic32/release/stockfish
+
+  emulated:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pentium-class 32-bit x86. The i586 targets emit no cmov, MMX or
+          # SSE (the code is scanned for them below).
+          # With glibc: Ubuntu's i386 glibc needs cmov (it is built for
+          # i686), so this runs on qemu's Pentium model plus cmov: the
+          # feature set of the Pentium Pro of the fork's goal (no MMX, no SSE).
+          - name: i586 glibc (Pentium Pro, no SSE)
+            target: i586-unknown-linux-gnu
+            packages: gcc-multilib qemu-user
+            linker: gcc
+            runner: qemu-i386 -cpu pentium,+cmov
+            cmov: ok
+            file: "ELF 32-bit LSB.*Intel 80386"
+            perft_depth: 5
+          # Static with musl, so that nothing but the port, the Rust standard
+          # library and musl runs: on qemu's plain Pentium model (no cmov).
+          - name: i586 musl static (Pentium, no cmov, no SSE)
+            target: i586-unknown-linux-musl
+            packages: gcc-multilib qemu-user
+            linker: gcc
+            runner: qemu-i386 -cpu pentium
+            cmov: sigill
+            file: "ELF 32-bit LSB.*Intel 80386.*statically linked"
+            perft_depth: 5
+          # 32-bit ARM, hard float, no NEON (the target's default)
+          - name: ARMv7 32-bit
+            target: armv7-unknown-linux-gnueabihf
+            packages: gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
+            linker: arm-linux-gnueabihf-gcc
+            runner: qemu-arm -L /usr/arm-linux-gnueabihf
+            file: "ELF 32-bit LSB.*ARM"
+            perft_depth: 5
+          # big-endian, and 32-bit as well
+          - name: PowerPC 32-bit big-endian
+            target: powerpc-unknown-linux-gnu
+            packages: gcc-powerpc-linux-gnu libc6-dev-powerpc-cross qemu-user
+            linker: powerpc-linux-gnu-gcc
+            runner: qemu-ppc -L /usr/powerpc-linux-gnu
+            file: "ELF 32-bit MSB.*PowerPC"
+            perft_depth: 5
+    env:
+      TARGET: ${{ matrix.target }}
+      RUNNER: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Cross toolchain and emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }} bc file binutils
+          rustup toolchain install $RUSTUP_TOOLCHAIN --profile minimal --target $TARGET
+          triple=$(echo $TARGET | tr a-z- A-Z_)
+          echo "CARGO_TARGET_${triple}_LINKER=${{ matrix.linker }}" >> $GITHUB_ENV
+          echo "CARGO_TARGET_${triple}_RUNNER=$RUNNER" >> $GITHUB_ENV
+          echo "CARGO_BUILD_TARGET=$TARGET" >> $GITHUB_ENV
+          ${RUNNER%% *} --version
+
+      - name: Build
+        run: |
+          cargo build --release --locked
+          exe=target/$TARGET/release/stockfish
+          file $exe
+          file $exe | grep -E "${{ matrix.file }}"
+          echo "EXE=$PWD/$exe" >> $GITHUB_ENV
+
+      # The emulated CPU must reject what the target must not use; otherwise
+      # running under it proves nothing. The probes are static programs
+      # without libc, so that only the probed instruction can fault.
+      - name: The emulated CPU rejects SSE, SSE2 and popcnt (and cmov on the Pentium)
+        if: startsWith(matrix.target, 'i586-')
+        working-directory: ${{ runner.temp }}
+        run: |
+          # probe <instruction> <expected: ok|sigill|any>, on the CPU of $RUNNER
+          failed=0
+          probe() {
+            printf '.globl _start\n_start:\n  %s\n  mov $1, %%eax\n  xor %%ebx, %%ebx\n  int $0x80\n' "$1" > p.s
+            gcc -m32 -nostdlib -static -o p p.s
+            $RUNNER ./p 2>/dev/null && got=ok || { [ $? -eq 132 ] && got=sigill || got=other; }
+            echo "$RUNNER: $1: $got, expected $2"
+            [ $2 = any ] || [ $got = $2 ] || failed=1
+          }
+          probe "nop" ok
+          probe "cmovl %eax, %ebx" ${{ matrix.cmov }}
+          probe "fcmovb %st(1), %st" ${{ matrix.cmov }}
+          # qemu 8.2 executes MMX whatever the CPU model: the scan of the next
+          # step is what rules MMX out
+          probe "paddb %mm0, %mm0" any
+          probe "addps %xmm0, %xmm0" sigill
+          probe "mulps %xmm1, %xmm0" sigill
+          probe "paddq %xmm0, %xmm0" sigill
+          probe "addpd %xmm0, %xmm0" sigill
+          probe "cvtsi2sd %eax, %xmm0" sigill
+          probe "popcnt %eax, %ebx" sigill
+          exit $failed
+      - name: No instruction beyond the Pentium in the binary
+        if: startsWith(matrix.target, 'i586-')
+        run: |
+          # Also covers code the tests do not execute. With glibc the binary
+          # is dynamically linked, so its text is the port and the Rust
+          # standard library; with musl it is everything that runs.
+          objdump -d --no-show-raw-insn $EXE > disasm.txt
+          wc -l disasm.txt
+          grep -nE '\s(cmov|fcmov|fcomi|fucomi)[a-z]*\s|%[xy]?mm[0-9]' disasm.txt > bad.txt || true
+          if [ -s bad.txt ]; then
+            head -20 bad.txt
+            echo "::error::$(wc -l < bad.txt) instructions beyond the Pentium (i586) in $EXE"
+            exit 1
+          fi
+          echo "no cmov, fcmov, fcomi, MMX or SSE instruction"
+
+      - name: cargo test (emulated)
+        run: cargo test --release --locked
+      - name: Differential sample (emulated)
+        run: |
+          . ./differential.env
+          test -n "$DUMP_FIELDS"
+          RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh sample --fields "$DUMP_FIELDS"
+      - name: Differential sample, lines of play (emulated)
+        run: |
+          . ./differential.env
+          if [ -z "$DUMPLINE_FIELDS" ]; then
+            echo "::notice::dumpline is not ported yet (DUMPLINE_FIELDS is empty in rust/differential.env): skipped"
+            exit 0
+          fi
+          RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh lines --fields "$DUMPLINE_FIELDS"
+      - name: Perft (emulated), depth ${{ matrix.perft_depth }} at most
+        run: |
+          printf '#!/bin/sh\nexec %s %s "$@"\n' "$RUNNER" "$EXE" > emulated
+          chmod +x emulated
+          ./perft.sh ./emulated ${{ matrix.perft_depth }}

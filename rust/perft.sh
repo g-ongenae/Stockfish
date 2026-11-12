@@ -3,7 +3,8 @@
 # pipes the commands into the engine and compares the "Nodes searched" line.
 #
 # perft.sh <engine> [max-depth]   tests deeper than max-depth are skipped
-# Prints one line per test with the time taken, exits with 1 on a mismatch.
+# Prints one line per test with the time taken, exits with 1 on a mismatch or
+# if the engine exits with a non-zero status.
 
 EXE=${1:?usage: $0 <engine> [max-depth]}
 MAXDEPTH=${2:-99}
@@ -19,12 +20,15 @@ run_test() {
   local opt=""
   [ "$chess960" = "true" ] && opt="setoption name UCI_Chess960 value true"$'\n'
   local start=$(date +%s.%N)
-  local nodes=$(printf '%sposition %s\ngo perft %s\nquit\n' "$opt" "$pos" "$depth" | "$EXE" | sed -n 's/^Nodes searched: //p')
+  local out status
+  out=$(printf '%sposition %s\ngo perft %s\nquit\n' "$opt" "$pos" "$depth" | "$EXE")
+  status=$?
+  local nodes=$(sed -n 's/^Nodes searched: //p' <<< "$out")
   local secs=$(echo "$(date +%s.%N) - $start" | bc)
-  if [ "$nodes" = "$expected" ]; then
+  if [ "$status" -eq 0 ] && [ "$nodes" = "$expected" ]; then
     printf 'OK    depth %s %12s nodes %8.2fs %6.1f Mnps  %s\n' "$depth" "$nodes" "$secs" "$(echo "$nodes / $secs / 1000000" | bc -l)" "$pos"
   else
-    printf 'FAIL  depth %s expected %s got %s  %s\n' "$depth" "$expected" "${nodes:-nothing}" "$pos"
+    printf 'FAIL  depth %s expected %s got %s, exit status %s  %s\n' "$depth" "$expected" "${nodes:-nothing}" "$status" "$pos"
     failed=1
   fi
 }

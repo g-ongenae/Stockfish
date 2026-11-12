@@ -26,10 +26,11 @@ members of those layers out.
     cargo build --release -j2
     cargo test --release -j2
 
-    # the differential harness, only the members ported so far
-    FIELDS=fen,chess960,checkers,blockers_for_king,pinners,check_squares,threats,key,pawn_key,material_key,minor_piece_key,non_pawn_key,non_pawn_material,moves,gives_check,key_after,see
-    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh sample --fields $FIELDS
-    EXE=$PWD/target/release/stockfish DATA=/path/to/data ../tests/differential/verify.sh full --fields $FIELDS
+    # the differential harness, only the members ported so far, which
+    # differential.env lists (CI reads the same file)
+    . ./differential.env
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh sample --fields $DUMP_FIELDS
+    EXE=$PWD/target/release/stockfish DATA=/path/to/data ../tests/differential/verify.sh full --fields $DUMP_FIELDS
 
     # perft, the positions and node counts of tests/perft.sh
     ./perft.sh target/release/stockfish
