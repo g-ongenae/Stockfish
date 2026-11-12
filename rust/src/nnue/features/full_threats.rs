@@ -111,7 +111,14 @@ pub static THREAT_LUTS: ThreatLuts = {
 /// Index of a feature for a given king position and another piece on some
 /// square. An index of DIMENSIONS or more is an excluded feature.
 #[inline(always)]
-pub fn make_index(perspective: Color, attacker: Piece, from: Square, to: Square, attacked: Piece, ksq: Square) -> IndexType {
+pub fn make_index(
+    perspective: Color,
+    attacker: Piece,
+    from: Square,
+    to: Square,
+    attacked: Piece,
+    ksq: Square,
+) -> IndexType {
     let orientation = ORIENT_TBL[ksq as usize & 63] ^ (56 * perspective);
     let from_oriented = (from ^ orientation) as usize & 63;
     let to_oriented = (to ^ orientation) as usize & 63;

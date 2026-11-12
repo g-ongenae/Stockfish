@@ -53,7 +53,6 @@ impl<const IN: usize, const PADDED: usize, const OUT: usize> AffineTransform<IN,
             *out = sum;
         }
     }
-
 }
 
 /// The first layer, `AffineTransformSparseInput<IN, OUT>`, whose input is

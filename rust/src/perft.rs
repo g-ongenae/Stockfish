@@ -31,7 +31,12 @@ pub fn perft<const ROOT: bool>(pos: &mut Position, depth: Depth, out: &mut dyn W
 }
 
 /// `Benchmark::perft(fen, depth, isChess960)`.
-pub fn perft_fen(fen: &[u8], depth: Depth, chess960: bool, out: &mut dyn Write) -> Result<u64, crate::position::PositionSetError> {
+pub fn perft_fen(
+    fen: &[u8],
+    depth: Depth,
+    chess960: bool,
+    out: &mut dyn Write,
+) -> Result<u64, crate::position::PositionSetError> {
     let mut pos = Position::new();
     pos.set(fen, chess960)?;
     Ok(perft::<true>(&mut pos, depth, out))

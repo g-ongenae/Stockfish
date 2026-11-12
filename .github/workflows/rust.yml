@@ -53,23 +53,14 @@ jobs:
           persist-credentials: false
       - name: Toolchain
         run: rustup toolchain install $RUSTUP_TOOLCHAIN --profile minimal --component rustfmt,clippy
-      # Known failure: the crate has never been formatted with rustfmt's
-      # defaults (77 differences at the time this job was added). The step
-      # reports them without failing the job until the crate is formatted,
-      # or given a rustfmt.toml, in a PR of its own; then drop the next line.
-      - name: cargo fmt --check (known failure, not gating)
-        continue-on-error: true
+      # rustfmt.toml gives the style of the crate (120 columns).
+      - name: cargo fmt --check
         run: cargo fmt --check
-      # Known failure as well: clippy stops at a needless_lifetimes lint in
-      # src/position.rs, and may find more behind it. Drop the
-      # continue-on-error lines once the crate is clean.
-      - name: cargo clippy (known failure, not gating)
+      - name: cargo clippy
         if: always()
-        continue-on-error: true
         run: cargo clippy --all-targets --locked -- -D warnings
-      - name: cargo clippy --features magic32 (known failure, not gating)
+      - name: cargo clippy --features magic32
         if: always()
-        continue-on-error: true
         run: cargo clippy --all-targets --locked --features magic32 -- -D warnings
 
   native:

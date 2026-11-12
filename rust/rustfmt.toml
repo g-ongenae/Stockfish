@@ -1,0 +1,5 @@
+# The style the crate was written in: lines of up to 120 columns, and short
+# constructs kept on one line. (The C++ sources use 100 columns; rustfmt's
+# defaults would rewrap about 170 places of the crate.)
+max_width = 120
+use_small_heuristics = "Max"

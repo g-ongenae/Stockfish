@@ -276,7 +276,8 @@ pub fn generate<const TYPE: GenType>(pos: &Position, list: &mut MoveList) {
             let rook_square = pos.castling_rook_square(cr);
             let to = relative_square(us, if rook_square > ksq { SQ_G1 } else { SQ_C1 });
 
-            if between_bb(ksq, to) & pos.threats_by(ALL_PIECES) == 0 && pos.blockers_for_king(us) & square_bb(rook_square) == 0
+            if between_bb(ksq, to) & pos.threats_by(ALL_PIECES) == 0
+                && pos.blockers_for_king(us) & square_bb(rook_square) == 0
             {
                 list.push(Move::make(CASTLING, ksq, rook_square, KNIGHT));
             }
