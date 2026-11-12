@@ -198,20 +198,26 @@ jobs:
         if: startsWith(matrix.target, 'i586-')
         working-directory: ${{ runner.temp }}
         run: |
-          # probe <instruction> <expected: ok|sigill> [cpu], on the CPU of $RUNNER
+          # probe <instruction> <expected: ok|sigill>, on the CPU of $RUNNER
+          failed=0
           probe() {
             printf '.globl _start\n_start:\n  %s\n  mov $1, %%eax\n  xor %%ebx, %%ebx\n  int $0x80\n' "$1" > p.s
             gcc -m32 -nostdlib -static -o p p.s
-            $RUNNER ./p && got=ok || { [ $? -eq 132 ] && got=sigill || got=other; }
+            $RUNNER ./p 2>/dev/null && got=ok || { [ $? -eq 132 ] && got=sigill || got=other; }
             echo "$RUNNER: $1: $got, expected $2"
-            [ $got = $2 ]
+            [ $got = $2 ] || failed=1
           }
           probe "nop" ok
           probe "cmovl %eax, %ebx" ${{ matrix.cmov }}
           probe "fcmovb %st(1), %st" ${{ matrix.cmov }}
           probe "paddb %mm0, %mm0" sigill
           probe "addps %xmm0, %xmm0" sigill
+          probe "mulps %xmm1, %xmm0" sigill
           probe "paddq %xmm0, %xmm0" sigill
+          probe "addpd %xmm0, %xmm0" sigill
+          probe "cvtsi2sd %eax, %xmm0" sigill
+          probe "popcnt %eax, %ebx" sigill
+          exit $failed
       - name: No instruction beyond the Pentium in the binary
         if: startsWith(matrix.target, 'i586-')
         run: |
