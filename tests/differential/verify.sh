@@ -17,23 +17,42 @@
 # e.g. to compare only what an implementation supports so far:
 # verify.sh sample --fields fen,key,moves
 #
-# EXE selects the binary (default ../../src/stockfish), RUN_PREFIX wraps it.
+# EXE selects the binary (default ../../src/stockfish, or ../../src/stockfish-trace
+# for trace and trace-full), RUN_PREFIX wraps it. There is no other default: the
+# binary checked is never taken from the shared folder unless EXE names it.
+#
+# The full modes read the golden files from DATA if set, else from
+# tests/differential/data if it holds those of the mode, else from the shared
+# folder, $STOCKFISH_SHARED/data (default ~/.local/share/stockfish-fork/data,
+# see shared.sh). The binary and the folder used are printed on stderr first.
 
 DIR=$(cd "$(dirname "$0")" && pwd)
 PYTHON=${PYTHON:-python3}
+. "$DIR/shared.sh"
 
-case ${1:-sample} in
+MODE_NAME=${1:-sample}
+case $MODE_NAME in
    sample) data=$DIR/sample ext=gz kind= mode= ;;
-   full) data=${DATA:-$DIR/data} ext=zst kind= mode= ;;
+   full) data=${DATA:-} ext=zst kind= mode= ;;
    lines) data=$DIR/sample ext=gz kind=.lines mode=--lines ;;
-   lines-full) data=${DATA:-$DIR/data} ext=zst kind=.lines mode=--lines ;;
+   lines-full) data=${DATA:-} ext=zst kind=.lines mode=--lines ;;
    trace) data=$DIR/sample ext=gz kind=.trace mode= ;;
-   trace-full) data=${DATA:-$DIR/data} ext=zst kind=.trace mode= ;;
+   trace-full) data=${DATA:-} ext=zst kind=.trace mode= ;;
    trace-uci) data=$DIR/sample ext=gz kind=.trace mode=--uci ;;
-   trace-uci-full) data=${DATA:-$DIR/data} ext=zst kind=.trace mode=--uci ;;
+   trace-uci-full) data=${DATA:-} ext=zst kind=.trace mode=--uci ;;
    *) echo "usage: $0 [sample|full|lines|lines-full|trace|trace-full|trace-uci|trace-uci-full] [options of 'verify']"; exit 2 ;;
 esac
 [ $# -gt 0 ] && shift
+
+# The full modes: DATA, else the checkout's data/ if it has this mode's golden
+# files, else the shared folder
+if [ $ext = zst ] && [ -z "$data" ]; then
+   if [ -f "$DIR/data/standard$kind.jsonl.zst" ]; then
+      data=$DIR/data
+   else
+      data=$SHARED_DATA
+   fi
+fi
 
 if [ ! -f "$data/standard$kind.jsonl.$ext" ]; then
    if [ "$kind" = .trace ]; then
@@ -44,13 +63,33 @@ if [ ! -f "$data/standard$kind.jsonl.$ext" ]; then
    exit 1
 fi
 
+# A data folder made for other contents than those recorded in git (a rebuild
+# with another engine or corpus) is refused
+if [ $ext = zst ]; then
+   manifest=CONTENT$([ "$kind" = .trace ] && echo .trace).sha256
+   if [ -f "$data/$manifest" ] && ! cmp -s "$data/$manifest" "$DIR/$manifest"; then
+      echo "$data/$manifest differs from $DIR/$manifest: these golden files are not the ones recorded in git."
+      exit 1
+   fi
+fi
+
+# The binary checked: EXE, else the one of this checkout. Said on stderr, with
+# a note when it is the reference binary of the shared folder.
+if [ "$kind" = .trace ] && [ "$mode" != --uci ]; then
+   export EXE=${EXE:-$DIR/../../src/stockfish-trace}
+else
+   export EXE=${EXE:-$DIR/../../src/stockfish}
+fi
+note=
+for ref in "$STOCKFISH_SHARED"/oracle/stockfish*; do
+   if [ -f "$ref" ] && [ "$EXE" -ef "$ref" ]; then
+      note=" (the reference binary of the shared folder)"
+   fi
+done
+echo "verify.sh ${MODE_NAME}: engine $EXE$note${RUN_PREFIX:+, run with $RUN_PREFIX}; golden files in $data" >&2
+
 status=0
 if [ "$kind" = .trace ]; then
-   if [ "$mode" = --uci ]; then
-      export EXE=${EXE:-$DIR/../../src/stockfish}
-   else
-      export EXE=${EXE:-$DIR/../../src/stockfish-trace}
-   fi
    "$PYTHON" "$DIR/search_trace.py" verify $mode "$data/standard.trace.$ext" "$data/standard.trace.jsonl.$ext" "$@" || status=1
    "$PYTHON" "$DIR/search_trace.py" --chess960 verify $mode "$data/chess960.trace.$ext" "$data/chess960.trace.jsonl.$ext" "$@" || status=1
    exit $status

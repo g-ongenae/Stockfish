@@ -33,7 +33,16 @@ The port reads the network from a file rather than embedding it: the
 (relative to the working directory) and then in the directory of the binary,
 as the C++ engine does for a network that is not embedded. It is loaded on the
 first `dump` or `dumpline`; without it the engine stops with the same messages
-as the C++ one. `go perft` and the other commands do not need it. To get it:
+as the C++ one. `go perft` and the other commands do not need it.
+
+On the development machine the network is in the shared folder (see
+`tests/differential/README.md`, "The shared folder"): link it next to the
+binary rather than downloading it again.
+
+    S=${STOCKFISH_SHARED:-$HOME/.local/share/stockfish-fork}
+    ln -sf "$S/oracle/nn-18cd32e11a9c.nnue" target/release/
+
+Elsewhere, download it into `src/` and link that:
 
     make -C ../src net                                  # downloads it into src/, checks its hash
     ln -sf ../../../src/nn-18cd32e11a9c.nnue target/release/
@@ -44,18 +53,23 @@ as the C++ one. `go perft` and the other commands do not need it. To get it:
     cargo build --release -j2
     cargo test --release -j2
 
-    # the network, found in the working directory or next to the binary
-    make -C ../src net && ln -sf ../../../src/nn-18cd32e11a9c.nnue target/release/
+    # the network, found in the working directory or next to the binary (see
+    # "The network": from the shared folder, or downloaded into src/)
+    ln -sf "${STOCKFISH_SHARED:-$HOME/.local/share/stockfish-fork}/oracle/nn-18cd32e11a9c.nnue" target/release/
 
     # the differential harness, on the members ported, which differential.env
     # lists (CI reads the same file): 19 members of dump (all but the move
     # picker), every member of dumpline
     . ./differential.env
     EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh sample --fields $DUMP_FIELDS
-    EXE=$PWD/target/release/stockfish DATA=/path/to/data ../tests/differential/verify.sh full --fields $DUMP_FIELDS
-
     EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh lines --fields $DUMPLINE_FIELDS
-    EXE=$PWD/target/release/stockfish DATA=/path/to/data ../tests/differential/verify.sh lines-full --fields $DUMPLINE_FIELDS
+
+    # the full gates: the golden files are read from DATA if set, else from
+    # tests/differential/data, else from the shared folder; verify.sh prints
+    # the binary and the folder it uses. EXE must name the port: without it
+    # verify.sh checks src/stockfish, the C++ engine.
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh full --fields $DUMP_FIELDS
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh lines-full --fields $DUMPLINE_FIELDS
 
     # perft, the positions and node counts of tests/perft.sh
     ./perft.sh target/release/stockfish

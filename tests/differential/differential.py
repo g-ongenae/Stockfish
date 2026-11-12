@@ -268,6 +268,8 @@ def cmd_verify(args):
         for field, n in sorted(by_field.items(), key=lambda item: -item[1]):
             print(f"  {field:20} {n:8}")
         sys.exit(1)
+    if count == 0:
+        sys.exit(f"FAILED {args.corpus}: no position compared, the corpus is empty")
     print(f"OK {args.corpus}: {count} positions match ({what})")
 
 
@@ -435,6 +437,8 @@ def cmd_verify_lines(args):
         for field, n in sorted(by_field.items(), key=lambda item: -item[1]):
             print(f"  {field:20} {n:8}")
         sys.exit(1)
+    if number == 0:
+        sys.exit(f"FAILED {args.corpus}: no line compared, the corpus is empty")
     print(f"OK {args.corpus}: {number} lines, {num_records} records match ({what})")
 
 
