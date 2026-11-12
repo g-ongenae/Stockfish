@@ -92,6 +92,67 @@ pub static ZOBRIST: Zobrist = {
     z
 };
 
+/// Marcel van Kervinck's cuckoo algorithm to detect repetitions of positions
+/// for 3-fold repetition draws: two hash tables with the Zobrist hashes of the
+/// reversible moves (`cuckoo` and `cuckooMove` in C++). First and second hash
+/// functions for indexing them:
+#[inline(always)]
+const fn h1(h: Key) -> usize {
+    (h & 0x1fff) as usize
+}
+
+#[inline(always)]
+const fn h2(h: Key) -> usize {
+    ((h >> 16) & 0x1fff) as usize
+}
+
+pub struct Cuckoo {
+    pub keys: [Key; 8192],
+    pub moves: [Move; 8192],
+}
+
+/// Filled as in `Position::init()`, in the same order, so that the moves land
+/// in the same slots (a key may sit in either of its two slots depending on
+/// the order of the insertions). Computed at compile time.
+pub static CUCKOO: Cuckoo = {
+    let mut c = Cuckoo { keys: [0; 8192], moves: [Move::none(); 8192] };
+    let mut count = 0;
+    let mut i = 0;
+    while i < PIECES.len() {
+        let pc = PIECES[i];
+        let mut s1 = 0;
+        while s1 < 64 {
+            let mut s2 = s1 + 1;
+            while s2 < 64 {
+                // attacks_bb(type_of(pc), s1, 0) for pieces other than pawns
+                if type_of(pc) != PAWN && PSEUDO_ATTACKS[type_of(pc) as usize][s1] & (1u64 << s2) != 0 {
+                    let mut mv = Move::new(s1 as Square, s2 as Square);
+                    let mut key = ZOBRIST.psq[pc as usize][s1] ^ ZOBRIST.psq[pc as usize][s2] ^ ZOBRIST.side;
+                    let mut j = h1(key);
+                    loop {
+                        let (k, m) = (c.keys[j], c.moves[j]);
+                        c.keys[j] = key;
+                        c.moves[j] = mv;
+                        key = k;
+                        mv = m;
+                        if mv.0 == Move::none().0 {
+                            break; // Arrived at an empty slot
+                        }
+                        // Push the victim to its alternative slot
+                        j = if j == h1(key) { h2(key) } else { h1(key) };
+                    }
+                    count += 1;
+                }
+                s2 += 1;
+            }
+            s1 += 1;
+        }
+        i += 1;
+    }
+    assert!(count == 3668);
+    c
+};
+
 /// Information needed to restore a position to its previous state when a
 /// move is retracted. The first group of members is copied by `do_move()`,
 /// the second one is recomputed.
@@ -1653,6 +1714,54 @@ impl Position {
                 return true;
             }
             idx -= 1;
+        }
+        false
+    }
+
+    /// Tests whether the position has a move which draws by repetition. It
+    /// matches the outcome of is_draw() over all legal moves.
+    pub fn upcoming_repetition(&self, ply: i32) -> bool {
+        let st = self.st();
+        let end = st.rule50.min(st.plies_from_null);
+
+        if end < 3 {
+            return false;
+        }
+
+        // stp walks back two states at a time, as `stp->previous->previous`
+        let cur = self.states.len() - 1;
+        let original_key = st.key;
+        let mut stp = cur - 1;
+        let mut other = original_key ^ self.states[stp].key ^ ZOBRIST.side;
+
+        let mut i = 3;
+        while i <= end {
+            stp -= 1;
+            other ^= self.states[stp].key ^ self.states[stp - 1].key ^ ZOBRIST.side;
+            stp -= 1;
+
+            if other == 0 {
+                let move_key = original_key ^ self.states[stp].key;
+                let mut j = h1(move_key);
+                let found = CUCKOO.keys[j] == move_key || {
+                    j = h2(move_key);
+                    CUCKOO.keys[j] == move_key
+                };
+                if found {
+                    let mv = CUCKOO.moves[j];
+                    let s1 = mv.from_sq();
+                    let s2 = mv.to_sq();
+
+                    // For nodes before or at the root, check that the move is
+                    // a repetition rather than a move to the current position.
+                    if (between_bb(s1, s2) ^ square_bb(s2)) & self.pieces() == 0
+                        && (ply > i || self.states[stp].repetition != 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+            i += 2;
         }
         false
     }

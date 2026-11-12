@@ -5,7 +5,7 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 
-use crate::dump::PositionDumper;
+use crate::dump::{LineDumper, PositionDumper};
 use crate::movegen::MoveList;
 use crate::perft::perft_fen;
 use crate::position::{square_to_string, Position};
@@ -181,6 +181,12 @@ impl UciEngine {
                 drop(out);
                 self.dump(tokens.next());
             }
+            b"dumpline" => {
+                drop(out);
+                // std::getline(args >> std::ws, rest)
+                let start = tokens.rest.iter().position(|&c| !is_c_space(c)).unwrap_or(tokens.rest.len());
+                self.dump_line(&tokens.rest[start..]);
+            }
             b"d" => {
                 let _ = writeln!(out, "\nFen: {}\nKey: {:016X}", self.pos.fen(), self.pos.key());
             }
@@ -344,6 +350,67 @@ impl UciEngine {
             }
         }
         let _ = out.flush();
+    }
+}
+
+impl UciEngine {
+    /// `dumpline startpos|fen ... moves ...`: the given line of play.
+    /// `dumpline <file>`: each line of a file, one per line, blank lines
+    /// skipped, streamed.
+    fn dump_line(&mut self, rest: &[u8]) {
+        let first = Tokens { rest }.next().unwrap_or(b"");
+        let mut dumper = LineDumper::new();
+        let mut buf = Vec::with_capacity(1 << 16);
+
+        if first.is_empty() || first == b"startpos" || first == b"fen" {
+            dumper.dump(rest, self.chess960, &mut buf);
+            let mut out = io::stdout().lock();
+            let _ = out.write_all(&buf);
+            let _ = out.flush();
+            return;
+        }
+
+        let Ok(file) = File::open(path_from_bytes(first)) else {
+            let mut msg = b"Unable to read file ".to_vec();
+            msg.extend_from_slice(first);
+            self.terminate_on_critical_error(&msg);
+        };
+
+        let stdout = io::stdout();
+        let mut out = io::BufWriter::with_capacity(1 << 16, stdout.lock());
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        let mut read_error = false;
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Err(_) => {
+                    read_error = true;
+                    break;
+                }
+                Ok(_) => {}
+            }
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.iter().all(|&c| is_c_space(c)) {
+                continue;
+            }
+            buf.clear();
+            dumper.dump(&line, self.chess960, &mut buf);
+            if out.write_all(&buf).is_err() {
+                break;
+            }
+        }
+        let _ = out.flush();
+        drop(out);
+        // A read error must not pass for the end of the file
+        if read_error {
+            let mut msg = b"Unable to read file ".to_vec();
+            msg.extend_from_slice(first);
+            self.terminate_on_critical_error(&msg);
+        }
     }
 }
 
