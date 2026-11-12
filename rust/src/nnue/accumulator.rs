@@ -127,6 +127,69 @@ fn sub_acc(acc: &mut Acc, other: &Acc) {
     }
 }
 
+/// A list of weight rows to apply, at most a full refresh: 32 piece-square
+/// rows plus 256 threat and pawn pair rows.
+type Rows<'w> = crate::misc::ValueList<&'w [i8; L1], 288>;
+
+static ZERO_ROW: [i8; L1] = [0; L1];
+
+fn rows<'w>() -> Rows<'w> {
+    Rows::new(&ZERO_ROW)
+}
+
+/// Lanes of an accumulator updated at a time, a tile being kept in registers
+/// while all the rows are applied to it. Measured on x86-64: 32 lanes when
+/// the compiler can vectorize the loops, 8 when it cannot (the Pentium Pro
+/// class of CPU this port aims at). Any size gives the same values.
+#[cfg(any(target_feature = "sse2", target_feature = "neon", target_feature = "simd128"))]
+const TILE: usize = 32;
+#[cfg(not(any(target_feature = "sse2", target_feature = "neon", target_feature = "simd128")))]
+const TILE: usize = 8;
+const _: () = assert!(L1 % TILE == 0);
+
+/// dst = src - Σ subs + Σ adds, a tile at a time, so that the accumulator is
+/// read and written once whatever the number of rows (the tiling of C++).
+#[inline]
+fn apply_rows(dst: &mut Acc, src: &Acc, subs: &[&[i8; L1]], adds: &[&[i8; L1]]) {
+    for t in (0..L1).step_by(TILE) {
+        let mut tile: [i16; TILE] = src[t..t + TILE].try_into().unwrap();
+        for row in subs {
+            let r: &[i8; TILE] = row[t..t + TILE].try_into().unwrap();
+            for (a, &w) in tile.iter_mut().zip(r) {
+                *a = a.wrapping_sub(w as i16);
+            }
+        }
+        for row in adds {
+            let r: &[i8; TILE] = row[t..t + TILE].try_into().unwrap();
+            for (a, &w) in tile.iter_mut().zip(r) {
+                *a = a.wrapping_add(w as i16);
+            }
+        }
+        dst[t..t + TILE].copy_from_slice(&tile);
+    }
+}
+
+/// The same in place.
+#[inline]
+fn apply_rows_in_place(acc: &mut Acc, subs: &[&[i8; L1]], adds: &[&[i8; L1]]) {
+    let src = *acc;
+    apply_rows(acc, &src, subs, adds);
+}
+
+#[inline]
+fn push_psq_rows<'w>(rows: &mut Rows<'w>, list: &k32h3::IndexList, ft: &'w FeatureTransformer, block: usize) {
+    for &i in list.as_slice() {
+        rows.push(ft.psq_row(block, i));
+    }
+}
+
+#[inline]
+fn push_threat_rows<'w>(rows: &mut Rows<'w>, list: &ThreatIndexList, ft: &'w FeatureTransformer) {
+    for &i in list.as_slice() {
+        rows.push(ft.threat_row(i));
+    }
+}
+
 /// Removes then adds piece-square rows of a block.
 #[inline]
 fn apply_psq_features(
@@ -172,12 +235,14 @@ fn apply_combined(
     debug_assert!(psq_removed.len() == 1 || psq_removed.len() == 2);
     debug_assert!(psq_added.len() == 1 || psq_added.len() == 2);
 
+    let (mut subs, mut adds) = (rows(), rows());
+    push_psq_rows(&mut subs, psq_removed, ft, psq_block);
+    push_threat_rows(&mut subs, thr_removed, ft);
+    push_psq_rows(&mut adds, psq_added, ft, psq_block);
+    push_threat_rows(&mut adds, thr_added, ft);
+
     let p = perspective as usize;
-    let acc = &mut to.accumulation[p];
-    *acc = from.accumulation[p];
-    apply_psq_features(acc, psq_removed, psq_added, ft, psq_block);
-    apply_threat_features::<-1>(acc, thr_removed, ft);
-    apply_threat_features::<1>(acc, thr_added, ft);
+    apply_rows(&mut to.accumulation[p], &from.accumulation[p], subs.as_slice(), adds.as_slice());
 }
 
 /// Computes the accumulator of `target` from the computed one of the state
@@ -409,11 +474,14 @@ fn update_accumulator_refresh_cache(
     let p = perspective as usize;
     accumulator.acc.computed[p] = true;
 
-    apply_psq_features(&mut entry.accumulation, &removed, &added, ft, psq_block);
+    let (mut subs, mut adds) = (rows(), rows());
+    push_psq_rows(&mut subs, &removed, ft, psq_block);
+    push_psq_rows(&mut adds, &added, ft, psq_block);
+    apply_rows_in_place(&mut entry.accumulation, subs.as_slice(), adds.as_slice());
 
-    let acc = &mut accumulator.acc.accumulation[p];
-    *acc = entry.accumulation;
-    apply_threat_features::<1>(acc, &active, ft);
+    let mut active_rows = rows();
+    push_threat_rows(&mut active_rows, &active, ft);
+    apply_rows(&mut accumulator.acc.accumulation[p], &entry.accumulation, &[], active_rows.as_slice());
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +498,17 @@ impl AccumulatorStack {
             block_before: [0; COLOR_NB],
         };
         AccumulatorStack { accumulators: vec![state; Self::MAX_SIZE].into_boxed_slice(), size: 1 }
+    }
+
+    /// Number of states on the stack, the root one included.
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        false
     }
 
     #[inline(always)]

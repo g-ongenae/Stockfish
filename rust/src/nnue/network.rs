@@ -148,7 +148,12 @@ impl Network {
     }
 
     /// The output of the network, from the point of view of the side to move.
-    pub fn evaluate(&self, pos: &Position, accumulator_stack: &mut AccumulatorStack, cache: &mut AccumulatorCaches) -> Value {
+    pub fn evaluate(
+        &self,
+        pos: &Position,
+        accumulator_stack: &mut AccumulatorStack,
+        cache: &mut AccumulatorCaches,
+    ) -> Value {
         let mut transformed_features = [0u8; BUFFER_SIZE];
 
         let bucket = self.layer_stack(pos);
@@ -168,5 +173,29 @@ impl Network {
 
     pub fn layer_stack_fallback(&self) -> &[u16; RAW_LAYER_STACKS] {
         &self.layer_stack_fallback
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The hash in the header of nn-18cd32e11a9c.nnue, which the network
+    /// must match to be loaded.
+    #[test]
+    fn structure_hash_matches_the_default_network() {
+        assert_eq!(HASH, 0x9a4f_cb66);
+    }
+
+    #[test]
+    fn rejects_what_is_not_a_network() {
+        assert!(Network::load(&b""[..]).is_none());
+        assert!(Network::load(&b"not a network file at all"[..]).is_none());
+        let mut header = Vec::new();
+        for v in [VERSION, HASH, 0] {
+            header.extend_from_slice(&v.to_le_bytes());
+        }
+        // A valid header followed by nothing
+        assert!(Network::load(&header[..]).is_none());
     }
 }

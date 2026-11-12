@@ -55,7 +55,8 @@ impl FeatureTransformer {
 
         // vec![0; n] is backed by zeroed pages, so filling it does not hold
         // the network twice in memory.
-        let mut threat_and_pp_weights = vec![0i8; THREAT_AND_PP_DIMENSIONS as usize * HALF_DIMENSIONS].into_boxed_slice();
+        let threat_and_pp_size = THREAT_AND_PP_DIMENSIONS as usize * HALF_DIMENSIONS;
+        let mut threat_and_pp_weights = vec![0i8; threat_and_pp_size].into_boxed_slice();
         let threat_size = THREAT_INPUT_DIMENSIONS as usize * HALF_DIMENSIONS;
         stream.i8s(&mut threat_and_pp_weights[..threat_size]);
         stream.i8s(&mut threat_and_pp_weights[threat_size..]);

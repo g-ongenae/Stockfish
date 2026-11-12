@@ -54,16 +54,41 @@ impl<const IN: usize, const PADDED: usize, const OUT: usize> AffineTransform<IN,
         }
     }
 
-    /// Propagation for a sparse input, `affine_transform_non_ssse3`: the
-    /// weights are traversed in transposed order and zero inputs skipped.
+}
+
+/// The first layer, `AffineTransformSparseInput<IN, OUT>`, whose input is
+/// mostly zeros. Its weights are stored input-major, `weights[i * OUT + o]`
+/// (C++ scrambles them likewise for SSSE3), so that the outputs of one
+/// non-zero input are updated from contiguous weights. The sums are exact in
+/// i32, so the order does not change them.
+pub struct AffineTransformSparseInput<const IN: usize, const PADDED: usize, const OUT: usize> {
+    pub biases: [i32; OUT],
+    pub weights: Box<[i8]>,
+}
+
+impl<const IN: usize, const PADDED: usize, const OUT: usize> AffineTransformSparseInput<IN, PADDED, OUT> {
+    /// Reads the weights in the row order of the file and transposes them.
+    pub fn read_parameters<R: std::io::Read>(stream: &mut super::LeReader<R>) -> Self {
+        let dense = AffineTransform::<IN, PADDED, OUT>::read_parameters(stream);
+        let mut weights = vec![0i8; PADDED * OUT].into_boxed_slice();
+        for o in 0..OUT {
+            for i in 0..PADDED {
+                weights[i * OUT + o] = dense.weights[o * PADDED + i];
+            }
+        }
+        AffineTransformSparseInput { biases: dense.biases, weights }
+    }
+
+    /// Skips the zero inputs, as `affine_transform_non_ssse3` does.
     #[inline]
-    pub fn propagate_sparse(&self, input: &[u8], output: &mut [i32]) {
-        output[..OUT].copy_from_slice(&self.biases);
+    pub fn propagate(&self, input: &[u8], output: &mut [i32; OUT]) {
+        *output = self.biases;
         for (i, &x) in input[..IN].iter().enumerate() {
             if x != 0 {
                 let x = x as i32;
-                for (j, out) in output[..OUT].iter_mut().enumerate() {
-                    *out += self.weights[j * PADDED + i] as i32 * x;
+                let column: &[i8; OUT] = self.weights[i * OUT..(i + 1) * OUT].try_into().unwrap();
+                for (out, &w) in output.iter_mut().zip(column) {
+                    *out += w as i32 * x;
                 }
             }
         }

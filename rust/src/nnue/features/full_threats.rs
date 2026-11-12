@@ -203,3 +203,29 @@ pub fn append_changed_indices(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every index, excluded ones included, fits in the u16 of the lists
+    /// (C++ converts them to u16 before comparing with DIMENSIONS).
+    #[test]
+    fn indices_fit_in_u16() {
+        let mut max = 0;
+        for perspective in [WHITE, BLACK] {
+            for ksq in 0..64u8 {
+                for attacker in ALL_PIECES_LIST {
+                    for attacked in ALL_PIECES_LIST {
+                        for from in 0..64u8 {
+                            for to in 0..64u8 {
+                                max = max.max(make_index(perspective, attacker, from, to, attacked, ksq));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(max < 1 << 16, "{max}");
+    }
+}

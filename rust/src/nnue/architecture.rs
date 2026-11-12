@@ -11,7 +11,11 @@ const FC_1_INPUTS: usize = FC_0_OUTPUTS * 2;
 const FC_2_INPUTS: usize = FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2;
 
 pub struct NetworkArchitecture {
-    fc_0: AffineTransform<TRANSFORMED_FEATURE_DIMENSIONS, { ceil_to_multiple(L1, MAX_SIMD_WIDTH) }, FC_0_OUTPUTS>,
+    fc_0: AffineTransformSparseInput<
+        TRANSFORMED_FEATURE_DIMENSIONS,
+        { ceil_to_multiple(TRANSFORMED_FEATURE_DIMENSIONS, MAX_SIMD_WIDTH) },
+        FC_0_OUTPUTS,
+    >,
     fc_1: AffineTransform<FC_1_INPUTS, { ceil_to_multiple(FC_1_INPUTS, MAX_SIMD_WIDTH) }, FC_1_OUTPUTS>,
     fc_2: AffineTransform<FC_2_INPUTS, { ceil_to_multiple(FC_2_INPUTS, MAX_SIMD_WIDTH) }, 1>,
 }
@@ -32,7 +36,7 @@ pub const fn get_hash_value() -> u32 {
 impl NetworkArchitecture {
     /// The activations have no parameters.
     pub fn read_parameters<R: std::io::Read>(stream: &mut LeReader<R>) -> Option<NetworkArchitecture> {
-        let fc_0 = AffineTransform::read_parameters(stream);
+        let fc_0 = AffineTransformSparseInput::read_parameters(stream);
         let fc_1 = AffineTransform::read_parameters(stream);
         let fc_2 = AffineTransform::read_parameters(stream);
         (!stream.fail).then_some(NetworkArchitecture { fc_0, fc_1, fc_2 })
@@ -44,7 +48,7 @@ impl NetworkArchitecture {
         let mut fc_1_out = [0i32; FC_1_OUTPUTS];
         let mut fc_2_out = [0i32; 1];
 
-        self.fc_0.propagate_sparse(transformed_features, &mut fc_0_out);
+        self.fc_0.propagate(transformed_features, &mut fc_0_out);
         sqr_clipped_relu::<{ WEIGHT_SCALE_BITS + 1 }>(&fc_0_out, &mut concat[..FC_0_OUTPUTS]);
         clipped_relu::<{ WEIGHT_SCALE_BITS + 1 }>(&fc_0_out, &mut concat[FC_0_OUTPUTS..FC_1_INPUTS]);
 
