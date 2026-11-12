@@ -37,6 +37,7 @@
 #include "numa.h"
 #include "position.h"
 #include "search.h"
+#include "searchtrace.h"
 #include "syzygy/tbprobe.h"  // for Stockfish::Depth
 #include "thread.h"
 #include "tt.h"
@@ -111,6 +112,12 @@ class Engine {
     // false if the file cannot be opened or read
     void dump_line(const std::string& line) const;
     bool dump_lines(const std::filesystem::path& lineFile) const;
+
+#ifdef SEARCH_TRACE
+    // run the searches of each session of a file and print what they did, see
+    // searchtrace.h; returns false if the file cannot be opened or read
+    bool search_trace(const std::filesystem::path& file, const SearchTraceWindow& window);
+#endif
 
     const OptionsMap& get_options() const;
     OptionsMap&       get_options();

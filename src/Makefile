@@ -85,8 +85,11 @@ SRCS = attacks.cpp benchmark.cpp bitboard.cpp dump.cpp evaluate.cpp main.cpp \
 
 OTHER_SRCS = universal/entry_x86.cpp universal/entry_arm64.cpp universal/entry_riscv64.cpp universal/nnue_embed.cpp
 
+# Only in the tracing binary, see trace-build
+TRACE_SRCS = searchtrace.cpp
+
 HEADERS = attacks.h benchmark.h bitboard.h dump.h evaluate.h misc.h movegen.h movepick.h history.h \
-		nnue/nnue_misc.h nnue/features/k32h3.h nnue/features/full_threats.h \
+		searchtrace.h nnue/nnue_misc.h nnue/features/k32h3.h nnue/features/full_threats.h \
 		nnue/features/pp_3wide.h nnue/layers/affine_transform.h nnue/layers/affine_transform_sparse_input.h \
 		nnue/layers/clipped_relu.h nnue/layers/sqr_clipped_relu.h nnue/nnue_accumulator.h \
 		nnue/nnue_architecture.h nnue/nnue_common.h nnue/nnue_feature_transformer.h nnue/simd.h \
@@ -499,6 +502,12 @@ ifeq ($(MAKELEVEL),0)
 endif
 
 CXXFLAGS = $(ENV_CXXFLAGS) -Wall -Wcast-qual -fno-exceptions -std=c++17 $(EXTRACXXFLAGS)
+
+### The tracing binary (see trace-build) has the 'searchtrace' command
+ifeq ($(searchtrace),yes)
+	SRCS += $(TRACE_SRCS)
+	CXXFLAGS += -DSEARCH_TRACE
+endif
 DEPENDFLAGS = $(ENV_DEPENDFLAGS) -std=c++17
 LDFLAGS = $(ENV_LDFLAGS) $(EXTRALDFLAGS)
 
@@ -1030,6 +1039,7 @@ help:
 	echo "help                    > Display architecture details" && \
 	echo "profile-build           > standard build with profile-guided optimization" && \
 	echo "build                   > skip profile-guided optimization" && \
+	echo "trace-build             > build stockfish-trace, with the searchtrace debug command" && \
 	echo "macos-lipo              > macOS x86-64 + Apple silicon universal binary" && \
 	echo "net                     > Download the default nnue nets" && \
 	echo "strip                   > Strip executable" && \
@@ -1102,7 +1112,7 @@ endif
 
 
 .PHONY: help analyze build profile-build macos-lipo strip install clean net \
-	objclean profileclean config-sanity \
+	objclean profileclean config-sanity trace-build traceclean \
 	icx-profile-use icx-profile-make \
 	gcc-profile-use gcc-profile-make \
 	clang-profile-use clang-profile-make FORCE \
@@ -1217,8 +1227,26 @@ install:
 	-cp $(EXE) $(BINDIR)
 	$(STRIP) $(BINDIR)/$(EXE)
 
+# The tracing binary stockfish-trace, with the 'searchtrace' debug command
+# (see searchtrace.h and tests/differential/README.md). It is built from the
+# same sources with SEARCH_TRACE defined, in its own directory of objects
+# ($(TRACE_DIR), made of links to the sources), so that its objects never mix
+# with those of the default build, which it leaves untouched.
+TRACE_DIR := trace_build
+TRACE_TOP := $(sort $(foreach f,$(SRCS) $(TRACE_SRCS) $(HEADERS) Makefile incbin,$(firstword $(subst /, ,$(f)))))
+
+trace-build: net config-sanity
+	@mkdir -p $(TRACE_DIR)
+	@$(foreach f,$(TRACE_TOP) $(wildcard *.nnue),ln -sfn ../$(f) $(TRACE_DIR)/$(f);)
+	$(MAKE) -C $(TRACE_DIR) ARCH=$(ARCH) COMP=$(COMP) EXE=stockfish-trace searchtrace=yes all
+	@cp $(TRACE_DIR)/stockfish-trace .
+
+traceclean:
+	@find "$(TRACE_DIR)" -type l -exec rmdir {} + 2>/dev/null || true
+	@rm -rf "$(TRACE_DIR)" stockfish-trace stockfish-trace.exe
+
 # clean all
-clean: objclean profileclean universalclean
+clean: objclean profileclean universalclean traceclean
 	@rm -f .depend *~ core
 
 # clean binaries and objects
@@ -1247,7 +1275,7 @@ net:
 	@$(SHELL) ../scripts/net.sh
 
 format:
-	$(CLANG-FORMAT) -i $(SRCS) $(OTHER_SRCS) $(HEADERS) -style=file
+	$(CLANG-FORMAT) -i $(SRCS) $(OTHER_SRCS) $(TRACE_SRCS) $(HEADERS) -style=file
 
 ### ==========================================================================
 ### Section 5. Private Targets

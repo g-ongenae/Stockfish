@@ -12,15 +12,21 @@ harness compares engines one component at a time. It consists of
   maintained incrementally (keys, rule50 and repetition bookkeeping, the
   evaluation from the incrementally updated NNUE accumulators, a null move and
   a probe move made and undone on the side), then walks back down the line,
+- the `searchtrace` debug command of a separate tracing binary, which runs
+  deterministic searches and records what they print, a digest of every node
+  they visit and every decision they make, and digests of the tables they leave
+  behind (see "The search trace"),
 - a corpus of 392,703 distinct positions and one of 4,432 lines of play
   (342,044 moves), taken from real games, and the golden files holding what
-  this engine prints for each of them,
+  this engine prints for each of them, and one of 17,270 searches drawn from
+  both,
 - scripts to rebuild the corpora and to verify a binary against the golden files.
 
 The golden files describe one exact engine: the commit they were generated at
 (`43e01e07`, bench 3464885) with its default network `nn-18cd32e11a9c.nnue`.
 They are not meant to follow master: any functional change to the evaluation,
-the network, SEE, move ordering or repetition detection changes them.
+the network, SEE, move ordering or repetition detection changes them, and any
+functional change to search changes those of the search trace.
 
 ## Quick start
 
@@ -30,6 +36,7 @@ the network, SEE, move ordering or repetition detection changes them.
     ../tests/differential/make_corpus.sh        # download and rebuild everything
     ../tests/differential/verify.sh full        # 392,703 positions
     ../tests/differential/verify.sh lines-full  # 4,432 lines of play
+    # searches: see "The search trace" for verify.sh trace, trace-uci, trace-full, trace-uci-full
 
     # another binary, and only what it implements so far
     EXE=/path/to/engine ../tests/differential/verify.sh full --fields fen,key,moves
@@ -221,15 +228,414 @@ the point is to exercise every way of reaching them):
 A wrong `undo_move()` or `undo_null_move()` shows up in the records that
 follow, since the line goes on from the position they restored.
 
+## The search trace
+
+`dump` and `dumpline` stop where search starts. Between "every member of every
+position and line matches" and "the bench signature matches" there would
+otherwise be nothing: a port of the search that gives bench 3464012 instead of
+3464885 learns nothing from the node count about where it went wrong. The
+search trace records what a deterministic single-threaded search does, at three
+levels:
+
+- **UCI output** (coarse, cheap): for each search, the `info` lines of each
+  iteration (depth, selective depth, score, bound, nodes, hashfull, principal
+  variation; time and speed left out), the best move and the ponder move. Any UCI
+  engine gives these, so this level can be checked with the default binary, or
+  with a port that has no tracing yet (`verify.sh trace-uci`).
+- **Events** (fine): every node visited, in order, with what was read (the
+  transposition table entry, the static evaluation raw and corrected), every
+  pruning, reduction or extension decision that fired, each move the move picker
+  gave with its stage and score, each child search with its depth and window,
+  each value returned, each write to the transposition table with the entry as
+  it is afterwards, and each history update with the entries as they are
+  afterwards. The golden files hold only a digest of this stream, checkpointed
+  every 4096 events; the stream itself is printed on demand, for one search, to
+  find the first event that differs (see "Bisecting").
+- **State** (after each search): digests of everything a search leaves for the
+  next one: each history table, the correction histories, the transposition
+  table. These tell "the search diverged" from "the search matched, but the
+  tables it left behind differ", which would otherwise only show in the next
+  search.
+
+The searches come in sessions. A session starts from a cleared state, as after
+`ucinewgame`, and its searches inherit the transposition table and the
+histories from each other, as in a game or in `bench`: the corpus has single
+searches on positions, and sequences of searches along games.
+
+### Quick start
+
+    cd src && make -j2 build && make -j2 trace-build   # stockfish and stockfish-trace
+    ../tests/differential/verify.sh trace              # 365 sessions, 983 searches, kept in git
+    ../tests/differential/verify.sh trace-uci          # the same, UCI output only, with src/stockfish
+    ../tests/differential/make_trace_corpus.sh         # rebuild the corpus (needs make_corpus.sh's)
+    ../tests/differential/verify.sh trace-full         # 11,032 sessions, 17,270 searches
+    ../tests/differential/verify.sh trace-uci-full
+
+    # the first event that differs, in session 12 of the sample
+    EXE=/path/to/port ../tests/differential/search_trace.py bisect \
+        ../tests/differential/sample/standard.trace.gz ../tests/differential/sample/standard.trace.jsonl.gz 12
+
+`EXE` selects the binary checked (default `src/stockfish-trace`, or
+`src/stockfish` for the `trace-uci` modes) and `REF` the reference tracing
+binary `bisect` compares it with (default `src/stockfish-trace`).
+
+### The tracing binary
+
+`make trace-build` builds `src/stockfish-trace` from the same sources with
+`SEARCH_TRACE` defined, in its own directory of objects (`src/trace_build`, made
+of links to the sources), so that its objects never mix with those of the
+default build. In any other build the trace hooks (`TRACE(...)` in `search.cpp`,
+see `searchtrace.h`) expand to empty statements and `search()` and `qsearch()`
+are the functions that do the work: the default binary is the same, byte for
+byte, as without the trace (checked with `cmp` on the binaries built before and
+after). In the tracing binary `search()` and `qsearch()` are thin wrappers
+recording the entry and the result of each node around `search_node()` and
+`qsearch_node()`, and each hook tests a pointer that is null unless
+`searchtrace` is running: its bench signature is 3464885 too, at the same speed.
+
+### The searchtrace command
+
+    searchtrace <file>                          run each session of the file
+    searchtrace <file> events <n> <from> <to>   also print the events [from, to) of search n of each session
+    searchtrace <file> events all <from> <to>   the same for every search
+    searchtrace <file> counts                   also print the number of events of each kind, at the end
+
+A session is one line of the file: `position` and `go` commands separated by
+`;`, the first one a `position`. `position` takes the arguments of the UCI
+command; `go` only `depth N` and/or `nodes N`, never a time. Blank lines and
+lines starting with `#` are skipped. For instance
+
+    position fen 8/8/5pp1/pp5p/6k1/8/3K4/8 w - - 2 64 ; go depth 7
+    position startpos moves e2e4 ; go nodes 5000 ; position startpos moves e2e4 e7e5 g1f3 ; go nodes 5000
+
+The command first sets the options a search depends on to fixed values:
+`Threads` 1, `Hash` 2 (MB), `MultiPV` 1, `Skill Level` 20, `UCI_LimitStrength`
+false, `UCI_ShowWDL` false, `SyzygyPath` empty (no tablebases), `nodestime` 0,
+`Ponder` false. `UCI_Chess960` is left as set. Each session then starts with
+what `ucinewgame` does (`Engine::search_clear`: the transposition table, the
+histories, the NNUE refresh caches, the node counter of the time check), and
+each `go` runs a real search through `Engine::go`. With one thread and no time
+limit the search is deterministic: the node limit is checked by node count only.
+
+The command works on the engine itself: it leaves the options above set, and
+the position, the transposition table and the histories as after the last
+search. It prints one record per search, as one line of JSON. A session that
+cannot be parsed gives the single record
+`{"session":<n>,"error":"<reason>","input":"<line>"}`; a position that cannot be
+set up gives such a record with the number of the search that would have
+followed, and ends the session.
+
+A record (this one has fewer than 4096 events, hence no checkpoint):
+
+    {"session":1,"search":1,"fen":"rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+     "go":"depth 3",
+     "info":["depth 1 seldepth 4 multipv 1 score cp 25 nodes 33 hashfull 0 tbhits 0 pv g1f3",
+             "depth 2 seldepth 3 multipv 1 score cp 47 nodes 69 hashfull 0 tbhits 0 pv g1f3",
+             "depth 3 seldepth 2 multipv 1 score cp 47 nodes 99 hashfull 0 tbhits 0 pv g1f3"],
+     "bestmove":"g1f3","ponder":null,"nodes":99,
+     "iterations":[{"depth":1,"completed":true,"score":70,"uci_score":70,"bound":"exact","seldepth":4,"nodes":33,"pv":"g1f3"}, ...],
+     "state":{"main_history":"D002D812F15CF939","low_ply_history":"F72F887E99F853BD",
+              "capture_history":"DB00ED5CDCE4E325","continuation_history":"6655B0CDC5297451",
+              "pawn_history":"379869F7FDD11A52","correction_history":"DE994B57683E8886",
+              "continuation_correction_history":"18FA6D6EA5462325","ttmove_history":0,
+              "tt_generation":1,"tt":"A0CB6630C7120847"},
+     "events":1437,"digest":"19BF911C77FC5280","checkpoints":[]}
+
+| Member | Meaning |
+| --- | --- |
+| `session`, `search` | Number of the session in the file (blank lines and comments not counted) and of the search in the session, from 1. |
+| `fen` | `Position::fen()` of the root. |
+| `go` | The limits, as `depth N`, `nodes N` or `depth N nodes M`. |
+| `info` | The `info` lines the search sent, in order, as the UCI command prints them, without `info ` and without the `nps` and `time` members. A position without legal move gives `depth 0 score mate 0` or `depth 0 score cp 0`. |
+| `bestmove`, `ponder` | As in the `bestmove` line; `ponder` is `null` when there is none. `(none)` without legal move. |
+| `nodes` | `Threads::nodes_searched()` at the end. |
+| `iterations` | Each iteration of iterative deepening as it ends, including one stopped by the node limit (`completed` false): `rootDepth`, then for the first root move `score` and `uciScore` (internal units), `bound` from its inexact flags, `seldepth`, the node count then and the `pv`. |
+| `state` | Digests of the tables after the search (see below). `low_ply_history` is `null` when no search ran (no legal move): it is filled at the start of each search and not cleared by `ucinewgame`, so it then holds what an earlier search left. |
+| `events` | Number of events of the search. |
+| `digest`, `checkpoints` | The digest of the whole event stream, and the digest of the stream up to event 4096, 8192, ... |
+
+### Events
+
+Each event is one line of text: a name, then `key=value` fields separated by
+single spaces. Values are integers in internal units (booleans 0 or 1,
+`VALUE_NONE` 32002), moves in UCI notation (`-` for none, `0000` for the null
+move), keys as 16 uppercase hexadecimal digits, squares like `e4`, pieces as FEN
+letters. The digest is 64-bit FNV-1a (offset basis `CBF29CE484222325`, prime
+`100000001B3`) over the bytes of the events, each followed by `\n`, from the
+first event of the search; `checkpoints[k]` is its value after event
+`4096 * (k + 1)`. With `events`, each event is printed as `<index> <event>`.
+
+The events are emitted where `search.cpp` makes the decision, in its order, so
+that a port with the same structure can emit them at the same points. Where an
+event is emitted only when something fires, the absence of the event is the
+other outcome.
+
+| Event | Fields | Where |
+| --- | --- | --- |
+| `start` | `generation`, `root_moves` | `iterative_deepening()`, after the low ply history is filled and the main history decayed. Not emitted without legal move: such a search has no event. |
+| `iteration` | `depth` | Each iteration, after `rootDepth++`. |
+| `aspiration` | `depth` (adjusted), `alpha`, `beta`, `delta`, `average`, `optimism` (side to move), `seek_mate` | Before each root search of the aspiration loop. |
+| `aspiration_result` | `value`, `fail` (`low`, `high`, `none`), `stopped` | After the root search and the stable sort of the root moves. |
+| `iteration_end` | `depth`, `completed`, `score`, `uci_score`, `bound`, `seldepth`, `nodes`, `pv` (comma separated) | End of the iteration, after the mate and aborted search handling. |
+| `search` | `ply`, `key`, `depth`, `alpha`, `beta`, `node` (`root`, `pv`, `nonpv`), `cut`, `excluded`, `nodes` | Each call of `search()`, before anything, with its arguments (`depth` may be 0 or less: the call goes on to `qsearch`). |
+| `qsearch` | `ply`, `key`, `alpha`, `beta`, `node`, `nodes` | Each call of `qsearch()`. |
+| `return` | `value` | The value the call returns, whichever `return` it is. |
+| `repetition_draw` | `alpha` | `upcoming_repetition()` raised alpha to a draw value. |
+| `immediate` | `reason` (`stop`, `draw`, `max_ply`) | Step 2 returns. |
+| `mate_distance_cutoff` | | Step 3 returns. |
+| `tt` | `hit`, `slot` (cluster:entry), then the entry in that slot as read: `key21`, `move`, `value`, `eval`, `depth`, `bound`, `pv`, `generation`; then `tt_move`, `tt_value` as search uses them (root move, `value_from_tt`), `tt_pv` (`ss->ttPv`, or `pvHit` in qsearch), `tt_capture` (search only) | After the probe. Without a hit the slot is the one chosen for replacement. |
+| `static_eval` | search: `raw` (unadjusted, `VALUE_NONE` in check), `static` (corrected), `eval`, `correction` (the correction value), `improving`, `worsening`; qsearch: `raw`, `static`, `stand_pat`, `correction`, or `in_check=1` | Step 5, once `improving` and `opponentWorsening` are set (qsearch: before the stand pat test). |
+| `store` | `slot` and the entry after the write, as in `tt` | After each `TTWriter::write()`. |
+| `tt_penalize` | the same | After `TTWriter::penalize()` (step 6, case B). |
+| `hindsight_extension`, `hindsight_reduction` | `depth` | The depth adjustments based on the prior reduction. |
+| `tt_cutoff` | `checked` (the move after was probed) | Step 6 returns. |
+| `tt_cutoff_refused` | `next_value` | The check of the position after the TT move refused the cutoff. |
+| `tt_cutoff_rule50` | | A cutoff refused for a rule50 counter of 96 or more. |
+| `eval_diff_update` | `move`, `bonus`, `main`, `pawn` (if updated) | The quiet move ordering update from the evaluation difference. |
+| `razoring` | | Step 8, before the qsearch whose value is returned. |
+| `futility_pruning` | `margin` | Step 9 returns. |
+| `null_move` | `reduction` | Step 10, after `do_null_move()`. |
+| `null_move_result`, `null_move_verification`, `null_move_verification_result` | `value`, `min_ply`, `value` | The null move search, and the verification search at high depth. |
+| `iir` | `depth` | Step 11. |
+| `probcut` | `beta`, `depth` | Step 12 starts; then `pick`, `skip`, `probcut_move` (after `do_move()`), `value`, `store`, `probcut_cutoff`. |
+| `small_probcut` | | Step 13 returns. |
+| `pick` | `move`, `stage` (`tt`, `good_capture`, `good_quiet`, `bad`, `evasion`, `qsearch`, `probcut`), `score` (not for the TT move) | Every move the move picker returns, in search, qsearch and ProbCut. |
+| `skip` | `move`, `reason` (`excluded`, `root`) | The move is skipped before being counted. |
+| `move` | `move`, `count`, `capture`, `check`, `reduction` (search only: `r` after the PV and ttPv terms) | The move is counted. |
+| `skip_quiets` | | Each call of `skip_quiet_moves()` (step 15). |
+| `prune` | `reason` and values: `capture_futility` (`value`), `capture_see` (`margin`), `continuation_history` (`history`), `quiet_futility` (`value`, `lmr_depth`), `quiet_see` (`lmr_depth`); qsearch: `move_count`, `futility` (`value`), `futility_see` (`threshold`), `not_capture`, `see` | Step 15 and qsearch step 6 `continue`. |
+| `singular` | `beta`, `depth` | Step 16, before the excluded search; then `singular_extension` (`extension`, `depth`), `multi_cut` (returns) or `negative_extension`. |
+| `lmr` | `reduction` (final `r`), `depth` (`d`), `stat` | Step 18, before the reduced search; then `lmr_research` (`depth`) before the full depth one. |
+| `full_depth` | `reduction`, `stat` | Step 19, before the search. |
+| `pv_search` | `depth` | Step 20, before the search. |
+| `value` | `move`, `value` | After `undo_move()`. |
+| `stopped` | | Step 22 returns because the search was stopped. |
+| `root_move` | `move`, `score`, `uci_score`, `average`, `mean_squared`, `seldepth`, `bound` | After the update of the root move. |
+| `new_best`, `new_alpha`, `cutoff` | `value`, `inc` (search); `alpha`, `depth`; `cutoff_count` (search) | Step 22 (qsearch step 8). |
+| `fail_high_adjust`, `no_moves`, `checkmate`, `stalemate` | `value` | Step 23 (qsearch step 9). |
+| `all_stats` | `bonus`, `malus` | `update_all_stats()`, followed by its updates. |
+| `quiet_update` | `move`, `bonus`, `main`, `low_ply` (ply < 5), `continuation` (the entries at ply - 1, 2, 3, 4, 6 as `update_continuation_histories` updates them, `-` when skipped), `pawn` | After `update_quiet_histories()`. |
+| `continuation_update` | `piece`, `to`, `bonus`, `values` | After a direct call of `update_continuation_histories()`. |
+| `capture_update` | `move`, `bonus`, `value` | After a capture history update in `update_all_stats()`. |
+| `prior_quiet_update`, `prior_capture_update` | `move`, `bonus`, `main`, `pawn`; `to`, `value` | The bonuses for the prior move of a node that failed low. |
+| `ttmove_update` | `bonus`, `value` | After each update of the TT move history. |
+| `correction_update` | `bonus`, `pawn`, `minor`, `white`, `black`, `continuation` (3 entries) | After `update_correction_history()`. |
+
+The values printed after an update are the entries as they are after it, which
+pins down the indexing and the `StatsEntry` gravity formula along with the
+bonus.
+
+### State digests
+
+Each table is digested as a sequence of 64-bit little-endian words with 64-bit
+FNV-1a over words (`h = (h ^ w) * 100000001B3`, from `CBF29CE484222325`). A table
+of 16-bit entries gives one word per four entries, in row-major order of the C++
+declaration: `main_history` [color][from-to], `low_ply_history` [ply][from-to],
+`capture_history` [piece][to][captured type], `continuation_correction_history`
+[piece][to][piece][to]. `continuation_history` is the digest of the words formed
+by the digests of its four tables [in check][capture], each [piece][to][piece][to].
+`pawn_history` and `correction_history` are the digest of the digests of their
+entries (8192 entries of [piece][to]; 65536 entries of [color][pawn, minor,
+white, black]). `ttmove_history` and `tt_generation` are plain numbers. `tt` is
+the generation, then each cluster as four words: the packed 21-bit keys, then each
+entry as `depth8 | genBound8 << 8 | move16 << 16 | value16 << 32 | eval16 << 48`.
+A port that lays its tables out differently has to compute the digests in this
+order.
+
+### Bisecting
+
+`verify.sh trace` (and `search_trace.py verify`) says, for each search that
+differs, which members differ: an `info` line, the state tables, or the events,
+as the window of 4096 events where the streams first differ (from the first
+checkpoint that differs). `search_trace.py bisect CORPUS GOLDEN SESSION` then
+runs that session alone with both the binary checked and the reference tracing
+binary, prints the events of that window from both, and shows the first one that
+differs, with the nodes open at that event (from the root down: each node, the
+move being searched in it, and the event that called the next one) and the last
+events in common. A session can be run alone since each one starts from a cleared state.
+
+For instance, with the futility margin of step 9 changed from `45 + depth * 4`
+to `46 + depth * 4`:
+
+    $ EXE=changed/stockfish-trace ./search_trace.py bisect sample/standard.trace.gz sample/standard.trace.jsonl.gz 1 --before 4 --after 2
+    session 1, search 1: rnbqkbnr/pp3ppp/2p1p3/3P4/8/2N3P1/PP1PPP1P/R1BQKBNR b KQkq - 0 4, go nodes 866
+      events: the streams differ in events [0, 4096)
+    events [0, 4096) of search 1, reference src/stockfish-trace
+    nodes open at event 595, in the reference:
+      515 search ply=0 key=6AB3E941184342DA depth=2 alpha=-32 beta=-22 node=root cut=0 excluded=- nodes=37
+      582 move move=e6d5 count=2 capture=1 check=0 reduction=1676
+      583 lmr reduction=-1675 depth=3 stat=752
+      584 search ply=1 key=2E23BA34C0E386B5 depth=3 alpha=31 beta=32 node=nonpv cut=1 excluded=- nodes=42
+      588 move move=d1a4 count=1 capture=0 check=0 reduction=948
+      589 full_depth reduction=7712 stat=-1004
+      590 search ply=2 key=B91FF66908B79420 depth=1 alpha=-32 beta=-31 node=nonpv cut=0 excluded=- nodes=43
+    last events in common:
+      591 tt hit=0 slot=47391:0 key21=000000 move=- value=0 eval=0 depth=-3 bound=none pv=0 generation=0 tt_move=- tt_value=32002 tt_pv=0 tt_capture=0
+      592 store slot=47391:0 key21=179420 move=- value=32002 eval=73 depth=-2 bound=none pv=0 generation=1
+      593 static_eval raw=73 static=73 eval=73 correction=-122355 improving=1 worsening=1
+      594 eval_diff_update move=d1a4 bonus=-62 main=-623 pawn=-2013
+    first difference, event 595:
+      expected futility_pruning margin=-59
+      got      futility_pruning margin=-61
+    next events, expected / got:
+      596 return value=5
+      596 return value=5
+      597 value move=d1a4 value=-5
+      597 value move=d1a4 value=-5
+
+A port only has to print its own events for the window: the reference events
+come from `src/stockfish-trace`. The full trace of one search is
+`searchtrace <file> events <n> 0 1000000000`.
+
+### What it was checked to catch
+
+Engines built with one deliberate change each (then reverted), checked with the
+full corpora of `dump` and `dumpline`, the sample of the trace through plain
+UCI, and the sample of the trace (for the TT ageing rule, the full corpus too):
+
+| Change | bench | `dump` / `dumpline` | `trace-uci` (sample) | `trace` (sample) | First event that differs |
+| --- | ---: | --- | --- | --- | --- |
+| futility margin of step 9: `45 + depth * 4` to `46 + ...` | 2759672 | pass / pass | 211 | 408 | `futility_pruning margin=-59`, got `-61` |
+| malus of `update_all_stats`: `968 * depth - 235` to `- 230` | 2092076 | pass / pass | 211 | 481 | `all_stats bonus=52 malus=733`, got `malus=738` |
+| TT replacement: age weight 8 to 7 in `TranspositionTable::probe` | 3654537 | pass / pass | none (2 in the new sample) | none; 29 in the new sample; full corpus: 340, of which 21 change the UCI output | `tt hit=0 slot=31393:0 ...`, got `slot=31393:1`: another entry chosen for replacement |
+| low ply history weight in the quiet move scores: `8 *` to `9 *` | 3471622 | pass / pass | 294 | 474 | `pick move=c6c5 stage=good_quiet score=-4796`, got `-4694` |
+| threat term of the quiet move scores: `20 *` to `19 *` | 4428661 | `order_main_*` of 733 positions differ / pass | 141 | 392 | `pick move=f8a3 stage=bad score=-21296`, got `-20471` |
+
+The numbers are of searches that differ, in the sample of 250 + 60 sessions
+(492 searches) it had first; that sample missed the TT change, so 40 + 15
+games were added to it ("new sample", 983 searches). A change that the
+histories do not hide from `dump` (the last one) is caught by `dump` too; the
+others only by the trace, and the TT one mostly not even in the UCI output.
+
+### The corpus of the trace
+
+`search_trace.py select` chooses, by a hash of each position or line (so that
+the choice does not depend on the order of the corpora):
+
+- single searches, each in its own session, on positions of the corpus of
+  positions: 8,000 standard and 2,000 Chess960 positions, plus every position
+  with a rule50 counter of 80 or more (222 and 10); `go depth 1` to `10` for 70%
+  of them, `go nodes N` with N from 1 to about 6,300 (logarithmically spread)
+  for the others, so that many searches stop inside an iteration;
+- games, from the corpus of lines: 600 standard and 200 Chess960 lines, each a
+  session of 8 searches at successive positions of the game, every ply or every
+  other ply, then a 9th search of the first position again, whose entries are in
+  the table from older generations; `go depth 5` to `9` for two sessions in
+  three, `go nodes 2000` to `11999` for the others, the same for all the searches
+  of a session.
+
+| Set | Sessions | Searches | Inheriting | `go depth` / `go nodes` | Nodes | Events |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `standard` | 8,822 | 13,524 | 4,702 | 9,357 / 4,167 | 26,157,186 | 395,611,117 |
+| `chess960` | 2,210 | 3,746 | 1,536 | 2,647 / 1,099 | 7,492,835 | 117,273,518 |
+
+Of these searches, 299 have no legal move at the root, 5,144 iterations were
+stopped by the node limit, 832 searches end with a mate score.
+
+On the Pentium G3450 of this work (2 cores, no AVX2), with another build running
+alongside: `make_trace_corpus.sh` takes 400 s, `verify.sh trace-full` 468 s
+(about 85,000 nodes per second with the trace, against 375,000 for `bench`), and
+`verify.sh trace-uci-full` 192 s; `verify.sh trace` on the sample 36 s. The
+limits were chosen for that: a corpus of 33 million nodes, half an hour of work
+in all, and golden files of 7 MB.
+
+Number of events of each kind over the whole corpus (`searchtrace <file> counts`):
+
+| Event | `standard` | `chess960` |
+| --- | ---: | ---: |
+| `all_stats` | 4,763,580 | 1,350,238 |
+| `aspiration` | 174,749 | 52,192 |
+| `aspiration_result` | 174,749 | 52,192 |
+| `capture_update` | 1,834,883 | 579,249 |
+| `checkmate` | 20,449 | 4,491 |
+| `continuation_update` | 3,706,980 | 1,065,543 |
+| `correction_update` | 2,249,122 | 624,109 |
+| `cutoff` | 4,919,695 | 1,423,145 |
+| `eval_diff_update` | 12,660,161 | 3,823,873 |
+| `fail_high_adjust` | 4,528,909 | 1,346,351 |
+| `full_depth` | 8,875,575 | 2,492,294 |
+| `futility_pruning` | 8,939,141 | 2,758,440 |
+| `hindsight_extension` | 545,189 | 162,963 |
+| `hindsight_reduction` | 1,161,304 | 322,725 |
+| `iir` | 340,387 | 104,629 |
+| `immediate:draw` | 729,075 | 502 |
+| `immediate:stop` | 6,552 | 1,764 |
+| `iteration` | 97,608 | 26,729 |
+| `iteration_end` | 97,608 | 26,729 |
+| `lmr` | 13,403,024 | 3,799,960 |
+| `lmr_research` | 293,016 | 87,981 |
+| `mate_distance_cutoff` | 182,895 | 35,121 |
+| `move` | 46,550,374 | 14,219,776 |
+| `multi_cut` | 112,664 | 39,668 |
+| `negative_extension` | 49,285 | 16,101 |
+| `new_alpha` | 881,140 | 236,280 |
+| `new_best` | 11,795,877 | 3,419,988 |
+| `no_moves` | 31,739 | 6,061 |
+| `null_move` | 289,832 | 95,735 |
+| `null_move_result` | 289,832 | 95,735 |
+| `null_move_verification` | 4,831 | 204 |
+| `null_move_verification_result` | 4,831 | 204 |
+| `pick:bad` | 18,398,688 | 5,909,061 |
+| `pick:evasion` | 3,031,432 | 801,181 |
+| `pick:good_capture` | 1,712,597 | 566,500 |
+| `pick:good_quiet` | 15,765,504 | 4,500,007 |
+| `pick:probcut` | 419,409 | 133,366 |
+| `pick:qsearch` | 3,957,860 | 1,400,170 |
+| `pick:tt` | 4,084,300 | 1,175,863 |
+| `prior_capture_update` | 742,455 | 237,476 |
+| `prior_quiet_update` | 2,123,357 | 613,646 |
+| `probcut` | 1,167,504 | 353,121 |
+| `probcut_cutoff` | 335,317 | 110,475 |
+| `probcut_move` | 557,062 | 177,512 |
+| `prune:capture_futility` | 1,659,097 | 619,456 |
+| `prune:capture_see` | 1,926,212 | 612,950 |
+| `prune:continuation_history` | 448,338 | 86,975 |
+| `prune:futility` | 478,278 | 170,139 |
+| `prune:futility_see` | 801,817 | 289,890 |
+| `prune:move_count` | 766,287 | 289,752 |
+| `prune:not_capture` | 887,476 | 228,502 |
+| `prune:quiet_futility` | 11,322,473 | 3,766,167 |
+| `prune:quiet_see` | 1,982,697 | 603,704 |
+| `prune:see` | 564,911 | 197,250 |
+| `pv_search` | 1,590,241 | 461,798 |
+| `qsearch` | 8,102,931 | 2,348,382 |
+| `quiet_update` | 7,296,151 | 1,998,115 |
+| `razoring` | 192,806 | 62,293 |
+| `repetition_draw` | 272,174 | 45,032 |
+| `return` | 33,213,597 | 9,497,451 |
+| `root_move` | 3,240,972 | 1,014,129 |
+| `search` | 25,110,666 | 7,149,069 |
+| `singular` | 279,462 | 94,257 |
+| `singular_extension` | 114,582 | 37,721 |
+| `skip:excluded` | 262,354 | 88,860 |
+| `skip_quiets` | 5,183,548 | 1,684,777 |
+| `small_probcut` | 114,776 | 29,982 |
+| `stalemate` | 181 | 17 |
+| `stand_pat` | 3,460,430 | 991,603 |
+| `start` | 13,279 | 3,692 |
+| `static_eval` | 25,569,664 | 7,625,681 |
+| `stopped` | 19,711 | 5,658 |
+| `store` | 19,308,020 | 5,746,699 |
+| `tt` | 26,737,158 | 7,956,090 |
+| `tt_cutoff` | 2,380,226 | 680,200 |
+| `tt_cutoff_refused` | 600 | 138 |
+| `tt_cutoff_rule50` | 131,430 | 0 |
+| `tt_penalize` | 77,613 | 26,195 |
+| `ttmove_update` | 3,933,232 | 1,118,709 |
+| `value` | 26,157,186 | 7,492,835 |
+
+Never reached: `immediate` with `max_ply` (a search 246 plies deep), and `skip`
+with `root` (only with `searchmoves` or MultiPV, which the trace leaves out).
+
+
 ## What it does not cover
 
 The positions of the corpus are set up from their FEN, and `dumpline` only
 follows the lines of the corpus with a fixed schedule of evaluations, null moves
 and probes. Not covered:
 
-- The search itself: move ordering with real history tables, pruning,
-  extensions, the transposition table, time management. Perft and the bench
-  signature remain the tests of these.
+- The search itself, for `dump` and `dumpline`: see "The search trace" for what
+  the trace covers of it, and below for what it leaves out.
 - Play below a null move beyond its one reply: `plies_from_null` never goes
   past 1 there, so a repetition is never cut short by a null move, and no
   accumulator chain runs below one.
@@ -248,6 +654,33 @@ and probes. Not covered:
 - The internal steps of the accumulator updates (dirty pieces, dirty threats,
   the refresh cache entries): only their result, the network output, is
   compared. A port that gets the output right through other steps passes.
+
+Left out by the search trace:
+
+- Time management: every search has a depth or node limit, never a time, and
+  the members of the UCI output that depend on time (`time`, `nps`) are dropped.
+  `TimeManagement`, `elapsed()`, the time part of `check_time()`, the
+  `bestMoveChanges` and `effort` statistics and the stop decisions at the end of
+  an iteration are not exercised; `effort` and `bestMoveChanges` are not even
+  traced.
+- More than one thread, MultiPV, `searchmoves`, `Skill Level` and
+  `UCI_LimitStrength`, pondering, `go mate`, `go infinite`; Syzygy probing in
+  search and at the root (no tablebases are loaded). These are fixed to their
+  deterministic single values.
+- Hash sizes other than 2 MB, and so the index of the clusters for other sizes.
+- What happens inside a step without an event: for instance the conditions of a
+  pruning that does not fire are not printed, only that it did not fire; the
+  value of `lmrDepth` or of the history sums only when they prune; the steps of
+  `partial_insertion_sort` only through the order and scores of the moves. Two
+  ports that differ there in a way that changes no decision and no value pass.
+- The NNUE internals, as for `dumpline`: only the evaluations are printed.
+- State that is not carried from one search to the next and not printed:
+  the node counter of the time check (`callsCnt`) shows only through where a
+  node-limited search stops; the PV arrays only through the root PV.
+- The `low_ply_history` of a search with no legal move at the root, which holds
+  what an earlier search of the process left (`ucinewgame` does not clear it;
+  every search fills it before use). It is reported as `null`.
+- A search 246 plies deep (`max_ply`), the root `skip` (see the event counts).
 
 ## The corpus
 
@@ -356,14 +789,17 @@ In git:
 | File | |
 | --- | --- |
 | `make_corpus.sh` | Rebuilds everything below from the dumps, in about 20 minutes on a slow machine. Fails, leaving the sample alone, if what it built is not what `CONTENT.sha256` records; `--update` records the new files instead. |
-| `verify.sh` | Verifies a binary against the sample or the full golden files, of positions or of lines. |
+| `verify.sh` | Verifies a binary against the sample or the full golden files, of positions, of lines or of searches (`trace`, `trace-full`, and through plain UCI `trace-uci`, `trace-uci-full`). |
+| `make_trace_corpus.sh` | Rebuilds the corpus of the search trace from the corpora of positions and lines, with `src/stockfish-trace`, in about 7 minutes; checks it against `CONTENT.trace.sha256` the same way (`--update` records). |
+| `search_trace.py` | `select`, `generate`, `verify` (`--uci` for plain UCI), `bisect`, `sample` and `stats` for the search trace. The records are grouped by session, and each group must have the shape its session implies (searches numbered from 1, one per `go`, or an error ending the session), in the engine output as in the golden file. Standard library only; imports the file helpers of `differential.py`. |
 | `extract_positions.py` | PGN on stdin to FENs, or with `--lines` to lines of play, on stdout. Needs python-chess (`pip install chess`, 1.11.2 was used). |
 | `differential.py` | `generate`, `verify`, `canonicalize`, `sample` and `stats`, with `--lines` for lines of play. With `--lines`, the records are parsed before they are grouped by line, and each group must have the shape its corpus line implies (plies 0 to `n` in order, then a walk back over `n` moves with `n` entries in each list, or a single error), in the engine output as in the golden file; `generate` and `sample` refuse to write anything else. Standard library only. |
 | `SHA256SUMS` | Checksums of the two dumps. |
 | `CONTENT.sha256` | Checksums of the uncompressed corpus and golden files, to tell whether a rebuild gave the same ones. |
-| `sample/` | 4,000 + 1,000 positions drawn uniformly from the two sets, with their golden lines (2.7 MB), and 100 + 50 lines of play (`*.lines.gz`, 2.0 MB). Also checked by `tests/instrumented.py`. |
+| `CONTENT.trace.sha256` | The same for the search trace. |
+| `sample/` | 4,000 + 1,000 positions drawn uniformly from the two sets, with their golden lines (2.7 MB), 100 + 50 lines of play (`*.lines.gz`, 2.0 MB), and 290 + 75 sessions of the search trace (`*.trace.gz`, 983 searches, 0.5 MB: 250 + 60 drawn uniformly, plus 40 + 15 games). Also checked by `tests/instrumented.py`. |
 
-Not in git, in `tests/differential/data` (253 MB):
+Not in git, in `tests/differential/data` (260 MB):
 
 | File | Size | Uncompressed |
 | --- | ---: | ---: |
@@ -374,6 +810,9 @@ Not in git, in `tests/differential/data` (253 MB):
 | `standard.lines.zst`, `chess960.lines.zst` | 0.6 MB | 1.9 MB |
 | `standard.lines.jsonl.zst` | 34 MB | 335 MB |
 | `chess960.lines.jsonl.zst` | 15 MB | 137 MB |
+| `standard.trace.zst`, `chess960.trace.zst` | 0.3 MB | 2.6 MB |
+| `standard.trace.jsonl.zst` | 5.5 MB | 31 MB |
+| `chess960.trace.jsonl.zst` | 1.6 MB | 9 MB |
 
 The dumps and the golden files are never decompressed to disk. What is written
 uncompressed is small: the candidate positions during a rebuild (17 MB, deleted

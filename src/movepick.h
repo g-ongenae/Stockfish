@@ -54,6 +54,13 @@ class MovePicker {
     Move next_move();
     void skip_quiet_moves();
 
+#ifdef SEARCH_TRACE
+    // For the search trace: the stage and the score of the move last returned
+    const char* trace_stage() const;
+    bool        trace_is_tt_move() const;
+    int         trace_score() const;
+#endif
+
    private:
     template<typename Pred>
     Move select(Pred);

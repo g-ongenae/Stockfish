@@ -159,6 +159,10 @@ void UCIEngine::loop() {
             dump(is);
         else if (token == "dumpline")
             dump_line(is);
+#ifdef SEARCH_TRACE
+        else if (token == "searchtrace")
+            search_trace(is);
+#endif
         else if (token == "compiler")
             sync_cout << compiler_info() << sync_endl;
         else if (token == "export_net")
@@ -526,6 +530,43 @@ void UCIEngine::dump_line(std::istream& args) {
     else if (!engine.dump_lines(path_from_utf8(first)))
         terminate_on_critical_error("Unable to read file " + first);
 }
+
+#ifdef SEARCH_TRACE
+// searchtrace blah                         : run the searches of each session of file "blah"
+// searchtrace blah events <n> <from> <to>   : also print the events [from, to) of search n
+// searchtrace blah events all <from> <to>   : the same for every search
+// searchtrace blah counts                   : also print the number of events of each kind
+void UCIEngine::search_trace(std::istream& args) {
+    std::string       filename, token, which;
+    SearchTraceWindow window;
+    bool              valid = true;
+
+    args >> filename;
+    while (valid && args >> token)
+    {
+        if (token == "counts")
+            window.counts = true;
+        else if (token == "events" && args >> which >> window.from >> window.to
+                 && window.from < window.to)
+        {
+            if (which == "all")
+                window.search = -1;
+            else if (which.find_first_not_of("0123456789") != std::string::npos
+                     || (window.search = std::atoi(which.c_str())) < 1)
+                valid = false;
+        }
+        else
+            valid = false;
+    }
+
+    if (!valid)
+        terminate_on_critical_error(
+          "Usage: searchtrace <file> [events <search>|all <from> <to>] [counts]");
+
+    if (filename.empty() || !engine.search_trace(path_from_utf8(filename), window))
+        terminate_on_critical_error("Unable to read file " + filename);
+}
+#endif
 
 void UCIEngine::position(std::istringstream& is) {
     std::string token, fen;

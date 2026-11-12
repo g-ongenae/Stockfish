@@ -68,6 +68,9 @@ class UCIEngine {
     void position(std::istringstream& is);
     void dump(std::istream& args);
     void dump_line(std::istream& args);
+#ifdef SEARCH_TRACE
+    void search_trace(std::istream& args);
+#endif
     void setoption(std::istringstream& is);
     u64  perft(const Search::LimitsType&);
 

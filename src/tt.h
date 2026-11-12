@@ -111,6 +111,20 @@ class TranspositionTable {
     // The hash function; its only external use is memory prefetching
     Cluster* get_cluster(const Key key) const;
 
+#ifdef SEARCH_TRACE
+    // For the search trace: the entry a writer points to, where it lies, and a
+    // digest of the whole table
+    struct TraceEntry {
+        usize  cluster;
+        int    slot;
+        u32    key21;
+        TTData data;
+        u8     generation;
+    };
+    TraceEntry trace_entry(const TTWriter& writer) const;
+    u64        trace_digest() const;
+#endif
+
    private:
     friend struct TTEntry;
 

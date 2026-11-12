@@ -29,6 +29,7 @@
 #include "bitboard.h"
 #include "memory.h"
 #include "misc.h"
+#include "searchtrace.h"
 #include "syzygy/tbprobe.h"
 #include "thread.h"
 
@@ -304,6 +305,31 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
             TTWriter(cluster, replace)};
 }
 
+
+#ifdef SEARCH_TRACE
+TranspositionTable::TraceEntry TranspositionTable::trace_entry(const TTWriter& writer) const {
+    const TTEntry& e = writer.cluster->entry[writer.index];
+    return {usize(writer.cluster - table), writer.index,
+            u32((writer.cluster->keys >> (KeyBits * writer.index)) & KeyMask), e.read(),
+            u8(e.genBound8 & GENERATION_MASK)};
+}
+
+// The generation, then each cluster as four little-endian 64-bit words: the
+// packed keys, then each entry as depth8 | genBound8 << 8 | move16 << 16 |
+// value16 << 32 | eval16 << 48, folded with 64-bit FNV-1a.
+u64 TranspositionTable::trace_digest() const {
+    TraceDigest d;
+    d.word(generation8);
+    for (usize i = 0; i < clusterCount; ++i)
+    {
+        d.word(table[i].keys);
+        for (const TTEntry& e : table[i].entry)
+            d.word(u64(u8(e.depth8)) | u64(u8(e.genBound8)) << 8 | u64(Move(e.move16).raw()) << 16
+                   | u64(u16(i16(e.value16))) << 32 | u64(u16(i16(e.eval16))) << 48);
+    }
+    return d.value;
+}
+#endif
 
 // The hash function; its only external use is memory prefetching
 Cluster* TranspositionTable::get_cluster(const Key key) const {
