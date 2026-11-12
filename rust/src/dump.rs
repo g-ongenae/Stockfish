@@ -2,10 +2,12 @@
 //! position, compared with the C++ engine by `tests/differential`.
 //!
 //! The members are written in the same order and format as in C++. Those of
-//! the layers not ported yet (`nnue`, `eval`, `order_main_shallow`,
-//! `order_main_deep`, `order_qsearch`) are left out rather than faked.
+//! the move picker, not ported yet (`order_main_shallow`, `order_main_deep`,
+//! `order_qsearch`), are left out rather than faked.
 
+use crate::evaluate;
 use crate::movegen::MoveList;
+use crate::nnue::{AccumulatorCaches, AccumulatorStack, Network};
 use crate::position::Position;
 use crate::types::*;
 use crate::uci::move_to_string;
@@ -96,16 +98,23 @@ pub fn see_value(pos: &Position, m: Move) -> i32 {
     lo
 }
 
-/// `PositionDumper`: owns the position it works on, so the dump never touches
-/// the state of the engine.
-#[derive(Default)]
-pub struct PositionDumper {
+/// `PositionDumper`: owns the position it works on and its NNUE scratch
+/// state, so the dump never touches the state of the engine.
+pub struct PositionDumper<'a> {
+    network: &'a Network,
     pos: Position,
+    accumulators: AccumulatorStack,
+    caches: AccumulatorCaches,
 }
 
-impl PositionDumper {
-    pub fn new() -> PositionDumper {
-        PositionDumper { pos: Position::new() }
+impl<'a> PositionDumper<'a> {
+    pub fn new(network: &'a Network) -> PositionDumper<'a> {
+        PositionDumper {
+            network,
+            pos: Position::new(),
+            accumulators: AccumulatorStack::new(),
+            caches: AccumulatorCaches::new(network),
+        }
     }
 
     /// Appends the dump of the position, without the trailing newline. An
@@ -161,7 +170,22 @@ impl PositionDumper {
         append_int(out, pos.non_pawn_material(BLACK));
         out.push(b']');
 
-        // Not ported yet: "nnue" and "eval"
+        // Static evaluation from the point of view of the side to move, in
+        // internal units: the output of the network, and the final value with
+        // no optimism. As in search, a position in check is not evaluated.
+        append_key(out, "nnue");
+        if pos.checkers() == 0 {
+            self.accumulators.reset();
+            let nnue = self.network.evaluate(pos, &mut self.accumulators, &mut self.caches);
+            append_int(out, nnue);
+            append_key(out, "eval");
+            let eval = evaluate::evaluate(self.network, pos, &mut self.accumulators, &mut self.caches, VALUE_ZERO);
+            append_int(out, eval);
+        } else {
+            out.extend_from_slice(b"null");
+            append_key(out, "eval");
+            out.extend_from_slice(b"null");
+        }
 
         // Legal moves in generation order, with the properties of each one
         let moves = MoveList::legal(pos);
@@ -329,24 +353,28 @@ fn probe_move(pos: &Position, ply: i32, excluded: Move) -> Move {
 }
 
 /// `LineDumper`: sets the start position of a line of play up once, then makes
-/// the moves of the line on that same position, and prints the state reached
-/// incrementally. See tests/differential/README.md.
-#[derive(Default)]
-pub struct LineDumper {}
+/// the moves of the line on that same position with `do_move`, driving the
+/// NNUE accumulator stack and refresh cache the way search does, and prints
+/// the state reached incrementally. See tests/differential/README.md.
+pub struct LineDumper<'a> {
+    network: &'a Network,
+    accumulators: AccumulatorStack,
+    caches: AccumulatorCaches,
+}
 
-impl LineDumper {
+impl<'a> LineDumper<'a> {
     /// The accumulator stack is reset every WINDOW plies, as at the root of
     /// each search of a game; the refresh cache is only cleared between lines.
     pub const WINDOW: i32 = 64;
 
     /// Whether the position at a given ply of the line is skipped: neither
-    /// evaluated nor probed.
+    /// evaluated nor probed, so that the updates of several moves are chained.
     pub const fn skipped(ply: i32) -> bool {
         ply % 8 == 3 || ply % 8 >= 6
     }
 
-    pub fn new() -> LineDumper {
-        LineDumper {}
+    pub fn new(network: &'a Network) -> LineDumper<'a> {
+        LineDumper { network, accumulators: AccumulatorStack::new(), caches: AccumulatorCaches::new(network) }
     }
 
     /// Appends the dump of a line, given as the arguments of the UCI
@@ -389,18 +417,41 @@ impl LineDumper {
             pos.do_move(m);
         }
 
+        let network = self.network;
+        let accumulators = &mut self.accumulators;
+        let caches = &mut self.caches;
+
         // Set up once, then only do_move(), undo_move() and their null move kin
         let mut pos = Position::new();
         pos.reserve_states(moves.len() + 2);
         pos.set(&fen, is_chess960).expect("checked above");
+        caches.clear(network);
 
         let append_move = |out: &mut Vec<u8>, m: Move| append_string(out, move_to_string(m, is_chess960).as_bytes());
 
-        // A move made, evaluated and undone, as search does with the children
-        // of a node
-        let append_child = |out: &mut Vec<u8>, pos: &mut Position, m: Move| {
+        // The output of the network from the current accumulators, null in check
+        let append_nnue = |out: &mut Vec<u8>,
+                           pos: &Position,
+                           accumulators: &mut AccumulatorStack,
+                           caches: &mut AccumulatorCaches,
+                           evaluate: bool| {
+            if evaluate && pos.checkers() == 0 {
+                append_int(out, network.evaluate(pos, accumulators, caches));
+            } else {
+                out.extend_from_slice(b"null");
+            }
+        };
+
+        // A move made, evaluated and undone with an accumulator push and pop,
+        // as search does with the children of a node
+        let append_child = |out: &mut Vec<u8>,
+                            pos: &mut Position,
+                            accumulators: &mut AccumulatorStack,
+                            caches: &mut AccumulatorCaches,
+                            m: Move| {
             let gives_check = pos.gives_check(m);
-            pos.do_move_gc(m, gives_check);
+            let dirties = accumulators.push(pos);
+            pos.do_move_dirties(m, gives_check, dirties);
             out.push(b'{');
             append_key(out, "move");
             append_move(out, m);
@@ -411,8 +462,11 @@ impl LineDumper {
             append_int(out, pos.st().plies_from_null);
             append_key(out, "repetition");
             append_int(out, pos.st().repetition);
+            append_key(out, "nnue");
+            append_nnue(out, pos, accumulators, caches, true);
             out.push(b'}');
             pos.undo_move(m);
+            accumulators.pop();
         };
 
         let line_size = moves.len() as i32;
@@ -422,6 +476,7 @@ impl LineDumper {
         loop {
             // A new search would start here
             if ply % Self::WINDOW == 0 {
+                accumulators.reset();
                 root = ply;
             }
 
@@ -462,7 +517,18 @@ impl LineDumper {
             append_key(out, "upcoming_repetition");
             append_bool(out, pos.upcoming_repetition(ply - root));
 
-            // A null move, as in null move pruning, then a reply to it
+            // Evaluation from the incrementally updated accumulators
+            append_key(out, "nnue");
+            append_nnue(out, &pos, accumulators, caches, evaluate);
+            append_key(out, "eval");
+            if evaluate && pos.checkers() == 0 {
+                append_int(out, evaluate::evaluate(network, &pos, accumulators, caches, VALUE_ZERO));
+            } else {
+                out.extend_from_slice(b"null");
+            }
+
+            // A null move, as in null move pruning: no accumulator is pushed.
+            // Then a reply to it, as the null move search does.
             append_key(out, "null");
             if evaluate && pos.checkers() == 0 {
                 pos.do_null_move();
@@ -477,10 +543,12 @@ impl LineDumper {
                 append_int(out, pos.st().repetition);
                 append_key(out, "captured");
                 append_captured(out, &pos);
+                append_key(out, "nnue");
+                append_nnue(out, &pos, accumulators, caches, true);
                 append_key(out, "reply");
                 let reply = probe_move(&pos, ply, Move::none());
                 if reply != Move::none() {
-                    append_child(out, &mut pos, reply);
+                    append_child(out, &mut pos, accumulators, caches, reply);
                 } else {
                     out.extend_from_slice(b"null");
                 }
@@ -495,7 +563,7 @@ impl LineDumper {
             let next = if ply < line_size { moves[ply as usize] } else { Move::none() };
             let probe = if evaluate { probe_move(&pos, ply, next) } else { Move::none() };
             if probe != Move::none() {
-                append_child(out, &mut pos, probe);
+                append_child(out, &mut pos, accumulators, caches, probe);
             } else {
                 out.extend_from_slice(b"null");
             }
@@ -508,22 +576,29 @@ impl LineDumper {
 
             let m = moves[ply as usize];
             let gives_check = pos.gives_check(m);
-            pos.do_move_gc(m, gives_check);
+            let dirties = accumulators.push(&pos);
+            pos.do_move_dirties(m, gives_check, dirties);
             ply += 1;
         }
 
-        // Walk back down the line
+        // Walk back down the line. The positions of the current search window
+        // are evaluated on the way, which reuses the accumulators computed on
+        // the way up, including those computed backward after a refresh.
         let (mut keys, mut fens, mut nnues) = (Vec::new(), Vec::new(), Vec::new());
 
         for ply in (1..=line_size).rev() {
             pos.undo_move(moves[ply as usize - 1]);
+            let in_window = ply > root;
+            if in_window {
+                accumulators.pop();
+            }
 
             keys.push(if keys.is_empty() { b'[' } else { b',' });
             append_hex(&mut keys, pos.key());
             fens.push(if fens.is_empty() { b'[' } else { b',' });
             append_string(&mut fens, pos.fen().as_bytes());
             nnues.push(if nnues.is_empty() { b'[' } else { b',' });
-            nnues.extend_from_slice(b"null");
+            append_nnue(&mut nnues, &pos, accumulators, caches, in_window);
         }
 
         out.push(b'{');

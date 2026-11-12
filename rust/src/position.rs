@@ -9,9 +9,9 @@
 //! allocated in the hot path once the vector has the capacity for the game
 //! plus the search depth (see `Position::new`).
 //!
-//! Not ported yet, as only the search uses them: the dirty piece and threat
-//! lists `do_move()` fills for the NNUE accumulators, the cuckoo tables of
-//! `upcoming_repetition()`, `flip()` and the pretty printer.
+//! `do_move_dirties()` also fills the dirty piece, threat and pawn lists that
+//! the NNUE accumulators are updated from. Not ported: `flip()` and the
+//! pretty printer.
 
 use std::cell::Cell;
 
@@ -621,6 +621,15 @@ impl Position {
         self.piece_count[make_piece(color_of(pc), ALL_PIECES) as usize & 15] += 1;
     }
 
+    /// `put_piece(pc, s, dts)`: also records the threats that appear.
+    #[inline(always)]
+    fn put_piece_d(&mut self, pc: Piece, s: Square, dts: Option<&mut DirtyThreats>) {
+        self.put_piece(pc, s);
+        if let Some(dts) = dts {
+            self.update_piece_threats::<true>(pc, true, s, dts, !0);
+        }
+    }
+
     #[inline(always)]
     fn remove_piece(&mut self, s: Square) {
         let pc = self.board[s as usize & 63];
@@ -631,6 +640,17 @@ impl Position {
         self.board[s as usize & 63] = NO_PIECE;
         self.piece_count[pc as usize & 15] -= 1;
         self.piece_count[make_piece(color_of(pc), ALL_PIECES) as usize & 15] -= 1;
+    }
+
+    /// `remove_piece(s, dts)`: the threats that disappear are recorded before
+    /// the piece is removed.
+    #[inline(always)]
+    fn remove_piece_d(&mut self, s: Square, dts: Option<&mut DirtyThreats>) {
+        if let Some(dts) = dts {
+            let pc = self.board[s as usize & 63];
+            self.update_piece_threats::<true>(pc, false, s, dts, !0);
+        }
+        self.remove_piece(s);
     }
 
     #[inline(always)]
@@ -644,10 +664,139 @@ impl Position {
         self.board[to as usize & 63] = pc;
     }
 
+    /// `move_piece(from, to, dts)`: the rays through both squares are left
+    /// out of the discovered threats, as the piece stays on them.
+    #[inline(always)]
+    fn move_piece_d(&mut self, from: Square, to: Square, mut dts: Option<&mut DirtyThreats>) {
+        let pc = self.board[from as usize & 63];
+        let from_to = square_bb(from) | square_bb(to);
+        if let Some(dts) = dts.as_deref_mut() {
+            self.update_piece_threats::<true>(pc, false, from, dts, from_to);
+        }
+        self.move_piece(from, to);
+        if let Some(dts) = dts {
+            self.update_piece_threats::<true>(pc, true, to, dts, from_to);
+        }
+    }
+
     #[inline(always)]
     fn swap_piece(&mut self, s: Square, pc: Piece) {
         self.remove_piece(s);
         self.put_piece(pc, s);
+    }
+
+    /// `swap_piece(s, pc, dts)`. As in C++, the threats of the old piece are
+    /// computed once it is off the board, and no discovered threats are
+    /// recorded: the square stays occupied.
+    #[inline(always)]
+    fn swap_piece_d(&mut self, s: Square, pc: Piece, mut dts: Option<&mut DirtyThreats>) {
+        let old = self.board[s as usize & 63];
+        self.remove_piece(s);
+        if let Some(dts) = dts.as_deref_mut() {
+            self.update_piece_threats::<false>(old, false, s, dts, !0);
+        }
+        self.put_piece(pc, s);
+        if let Some(dts) = dts {
+            self.update_piece_threats::<false>(pc, true, s, dts, !0);
+        }
+    }
+
+    /// Records the threats a piece put on (or removed from) square `s` makes
+    /// and receives, and with COMPUTE_RAY the threats of sliders it uncovers
+    /// (or blocks), except along rays containing all of `no_rays_containing`.
+    /// The non-AVX512 path of `Position::update_piece_threats`; the order of
+    /// the list does not matter, as the updates are additions modulo 2^16.
+    fn update_piece_threats<const COMPUTE_RAY: bool>(
+        &self,
+        pc: Piece,
+        put_piece: bool,
+        s: Square,
+        dts: &mut DirtyThreats,
+        no_rays_containing: Bitboard,
+    ) {
+        #[inline(always)]
+        fn can_slider_threat(pc: Piece, slider: Piece) -> bool {
+            type_of(pc) != QUEEN || type_of(slider) == QUEEN
+        }
+
+        let occupied = self.pieces();
+        let (b_attacks, r_attacks) = both_attacks_bb(s, occupied);
+        let slider_attacks = b_attacks | r_attacks;
+        let occupied_no_k = occupied ^ self.pieces_pt(KING);
+        let pt = type_of(pc);
+        let sliders = (self.pieces_pt2(BISHOP, QUEEN) & b_attacks) | (self.pieces_pt2(ROOK, QUEEN) & r_attacks);
+
+        let process_sliders = |dts: &mut DirtyThreats, add_direct_attacks: bool| {
+            for slider_sq in Squares(sliders) {
+                let slider = self.piece_on(slider_sq);
+                let ray = ray_pass_bb(slider_sq, s);
+                let discovered = ray & slider_attacks & occupied_no_k;
+
+                debug_assert!(!more_than_one(discovered));
+                if discovered != 0 && (ray & no_rays_containing) != no_rays_containing {
+                    let threatened_sq = lsb(discovered);
+                    let threatened_pc = self.piece_on(threatened_sq);
+                    if can_slider_threat(threatened_pc, slider) {
+                        dts.list.push(DirtyThreat::new(slider, threatened_pc, slider_sq, threatened_sq, !put_piece));
+                    }
+                }
+
+                if add_direct_attacks && can_slider_threat(pc, slider) {
+                    dts.list.push(DirtyThreat::new(slider, pc, slider_sq, s, put_piece));
+                }
+            }
+        };
+
+        // Kings emit no direct threats
+        if pt == KING {
+            if COMPUTE_RAY {
+                process_sliders(dts, false);
+            }
+            return;
+        }
+
+        let threat_targets = match pt {
+            PAWN => self.pieces_pt2(KNIGHT, ROOK),
+            BISHOP | ROOK => self.pieces_pt2(PAWN, KNIGHT) | self.pieces_pt2(BISHOP, ROOK),
+            _ => occupied_no_k,
+        };
+        let threatened = match pt {
+            BISHOP => b_attacks,
+            ROOK => r_attacks,
+            QUEEN => slider_attacks,
+            PAWN => pawn_attacks(color_of(pc), s),
+            _ => pseudo_attacks(pt, s),
+        } & threat_targets;
+        let mut incoming_threats = pseudo_attacks(KNIGHT, s) & self.pieces_pt(KNIGHT);
+
+        if pt == KNIGHT || pt == ROOK {
+            incoming_threats |= (pawn_attacks(WHITE, s) & self.pieces_cp(BLACK, PAWN))
+                | (pawn_attacks(BLACK, s) & self.pieces_cp(WHITE, PAWN));
+        }
+
+        for threatened_sq in Squares(threatened) {
+            let threatened_pc = self.piece_on(threatened_sq);
+            debug_assert!(threatened_sq != s && threatened_pc != NO_PIECE);
+            dts.list.push(DirtyThreat::new(pc, threatened_pc, s, threatened_sq, put_piece));
+        }
+
+        if COMPUTE_RAY {
+            process_sliders(dts, true);
+        } else {
+            incoming_threats |= if pt == QUEEN { sliders & self.pieces_pt(QUEEN) } else { sliders };
+        }
+
+        for src_sq in Squares(incoming_threats) {
+            let src_pc = self.piece_on(src_sq);
+            debug_assert!(src_sq != s && src_pc != NO_PIECE);
+            dts.list.push(DirtyThreat::new(src_pc, pc, src_sq, s, put_piece));
+        }
+    }
+
+    /// The board as an array of 64 pieces, `piece_array()` in C++.
+    #[inline(always)]
+    pub fn piece_array(&self) -> &[Piece; SQUARE_NB] {
+        &self.board
     }
 
     // ---------------------------------------------------------------------
@@ -1255,7 +1404,20 @@ impl Position {
     }
 
     /// `do_move(m, newSt, givesCheck, ...)` without the NNUE bookkeeping.
+    #[inline]
     pub fn do_move_gc(&mut self, m: Move, gives_check: bool) {
+        self.do_move_impl(m, gives_check, None);
+    }
+
+    /// `do_move(m, newSt, givesCheck, dirties)`: also records in `dirties`
+    /// what the NNUE accumulators need to be updated (the moved pieces, the
+    /// threats that change and the pawns before and after the move).
+    #[inline]
+    pub fn do_move_dirties(&mut self, m: Move, gives_check: bool, dirties: &mut Dirties) {
+        self.do_move_impl(m, gives_check, Some(dirties));
+    }
+
+    fn do_move_impl(&mut self, m: Move, gives_check: bool, mut dirties: Option<&mut Dirties>) {
         debug_assert!(m.is_ok());
 
         let mut k = self.st().key ^ ZOBRIST.side;
@@ -1282,6 +1444,14 @@ impl Position {
         let pc = self.piece_on(from);
         let mut captured = if m.type_of() == EN_PASSANT { make_piece(them, PAWN) } else { self.piece_on(to) };
 
+        if let Some(d) = dirties.as_deref_mut() {
+            d.dirty_pawn_pairs.before = [self.pieces_cp(WHITE, PAWN), self.pieces_cp(BLACK, PAWN)];
+            d.dirty_piece.pc = pc;
+            d.dirty_piece.from = from;
+            d.dirty_piece.to = to;
+            d.dirty_piece.add_sq = SQ_NONE;
+        }
+
         debug_assert!(color_of(pc) == us);
         debug_assert!(captured == NO_PIECE || color_of(captured) == if m.type_of() != CASTLING { them } else { us });
         debug_assert!(type_of(captured) != KING);
@@ -1292,7 +1462,7 @@ impl Position {
             debug_assert!(pc == make_piece(us, KING));
             debug_assert!(captured == make_piece(us, ROOK));
 
-            let (rfrom, rto) = self.do_castling::<true>(us, from, &mut to);
+            let (rfrom, rto) = self.do_castling::<true>(us, from, &mut to, dirties.as_deref_mut());
 
             let rook_keys = z.psq[captured as usize][rfrom as usize] ^ z.psq[captured as usize][rto as usize];
             k ^= rook_keys;
@@ -1314,7 +1484,7 @@ impl Position {
                     debug_assert!(self.piece_on(capsq) == make_piece(them, PAWN));
 
                     // Update the board in the en passant case, normal captures are updated later
-                    self.remove_piece(capsq);
+                    self.remove_piece_d(capsq, dirties.as_deref_mut().map(|d| &mut d.dirty_threats));
                 }
                 self.st_mut().pawn_key ^= z.psq[captured as usize][capsq as usize];
             } else {
@@ -1327,6 +1497,11 @@ impl Position {
                 }
             }
 
+            if let Some(d) = dirties.as_deref_mut() {
+                d.dirty_piece.remove_pc = captured;
+                d.dirty_piece.remove_sq = capsq;
+            }
+
             k ^= z.psq[captured as usize][capsq as usize];
             // The count of an en passant pawn is already decremented
             let cnt = self.piece_count[captured as usize] - (m.type_of() != EN_PASSANT) as i32;
@@ -1335,6 +1510,8 @@ impl Position {
 
             // Reset rule 50 counter
             st.rule50 = 0;
+        } else if let Some(d) = dirties.as_deref_mut() {
+            d.dirty_piece.remove_sq = SQ_NONE;
         }
 
         // Update hash key
@@ -1385,6 +1562,12 @@ impl Position {
                 debug_assert!(relative_rank_of(us, to) == RANK_8);
                 debug_assert!((KNIGHT..=QUEEN).contains(&pt));
 
+                if let Some(d) = dirties.as_deref_mut() {
+                    d.dirty_piece.add_pc = promotion;
+                    d.dirty_piece.add_sq = to;
+                    d.dirty_piece.to = SQ_NONE;
+                }
+
                 // Zobrist::psq[pc][to] is zero, so it need not be cleared
                 let zp = z.psq[promotion as usize][to as usize];
                 k ^= zp;
@@ -1417,14 +1600,15 @@ impl Position {
         if m.type_of() != CASTLING {
             let to_pc = if m.type_of() == PROMOTION { make_piece(us, m.promotion_type()) } else { pc };
 
+            let mut dts = dirties.as_deref_mut().map(|d| &mut d.dirty_threats);
             if captured != NO_PIECE && m.type_of() != EN_PASSANT {
-                self.remove_piece(from);
-                self.swap_piece(to, to_pc);
+                self.remove_piece_d(from, dts.as_deref_mut());
+                self.swap_piece_d(to, to_pc, dts);
             } else if pc == to_pc {
-                self.move_piece(from, to);
+                self.move_piece_d(from, to, dts);
             } else {
-                self.remove_piece(from);
-                self.put_piece(to_pc, to);
+                self.remove_piece_d(from, dts.as_deref_mut());
+                self.put_piece_d(to_pc, to, dts);
             }
         }
 
@@ -1458,6 +1642,14 @@ impl Position {
         self.states[cur].repetition = repetition;
 
         debug_assert!(self.pos_is_ok());
+
+        if let Some(d) = dirties {
+            d.dirty_pawn_pairs.after = [self.pieces_cp(WHITE, PAWN), self.pieces_cp(BLACK, PAWN)];
+
+            debug_assert!(d.dirty_piece.pc != NO_PIECE);
+            debug_assert!((captured != NO_PIECE || m.type_of() == CASTLING) == (d.dirty_piece.remove_sq != SQ_NONE));
+            debug_assert!((d.dirty_piece.add_sq != SQ_NONE) == (m.type_of() == PROMOTION || m.type_of() == CASTLING));
+        }
     }
 
     /// Unmakes a move, restoring the position exactly as it was before.
@@ -1483,7 +1675,7 @@ impl Position {
         }
 
         if m.type_of() == CASTLING {
-            self.do_castling::<false>(us, from, &mut to);
+            self.do_castling::<false>(us, from, &mut to, None);
         } else {
             self.move_piece(to, from); // Put the piece back at the source square
 
@@ -1511,17 +1703,34 @@ impl Position {
     /// Does or undoes a castling move, a bit tricky in Chess960 where the
     /// origin and destination squares can overlap. On return `to` is the
     /// destination of the king; returns the origin and destination of the rook.
-    fn do_castling<const DO: bool>(&mut self, us: Color, from: Square, to: &mut Square) -> (Square, Square) {
+    fn do_castling<const DO: bool>(
+        &mut self,
+        us: Color,
+        from: Square,
+        to: &mut Square,
+        dirties: Option<&mut Dirties>,
+    ) -> (Square, Square) {
         let king_side = *to > from;
         let rfrom = *to; // Castling is encoded as "king captures friendly rook"
         let rto = relative_square(us, if king_side { SQ_F1 } else { SQ_D1 });
         *to = relative_square(us, if king_side { SQ_G1 } else { SQ_C1 });
 
+        let mut dts = None;
+        if let Some(d) = dirties {
+            debug_assert!(DO);
+            d.dirty_piece.to = *to;
+            d.dirty_piece.remove_pc = make_piece(us, ROOK);
+            d.dirty_piece.add_pc = make_piece(us, ROOK);
+            d.dirty_piece.remove_sq = rfrom;
+            d.dirty_piece.add_sq = rto;
+            dts = Some(&mut d.dirty_threats);
+        }
+
         // Remove both pieces first since squares could overlap in Chess960
-        self.remove_piece(if DO { from } else { *to });
-        self.remove_piece(if DO { rfrom } else { rto });
-        self.put_piece(make_piece(us, KING), if DO { *to } else { from });
-        self.put_piece(make_piece(us, ROOK), if DO { rto } else { rfrom });
+        self.remove_piece_d(if DO { from } else { *to }, dts.as_deref_mut());
+        self.remove_piece_d(if DO { rfrom } else { rto }, dts.as_deref_mut());
+        self.put_piece_d(make_piece(us, KING), if DO { *to } else { from }, dts.as_deref_mut());
+        self.put_piece_d(make_piece(us, ROOK), if DO { rto } else { rfrom }, dts);
         (rfrom, rto)
     }
 

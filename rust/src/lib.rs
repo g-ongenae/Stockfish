@@ -6,8 +6,10 @@
 pub mod attacks;
 pub mod bitboard;
 pub mod dump;
+pub mod evaluate;
 pub mod misc;
 pub mod movegen;
+pub mod nnue;
 pub mod perft;
 pub mod position;
 pub mod types;

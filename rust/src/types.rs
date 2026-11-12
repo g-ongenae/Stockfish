@@ -268,3 +268,77 @@ impl Move {
         self.0
     }
 }
+
+/// What `do_move()` changes on the board, for the NNUE piece-square features.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct DirtyPiece {
+    /// Never NO_PIECE after a move
+    pub pc: Piece,
+    /// `to` is SQ_NONE for promotions
+    pub from: Square,
+    pub to: Square,
+    /// If {add,remove}_sq is SQ_NONE, {add,remove}_pc is meaningless. Castling
+    /// uses add_sq and remove_sq to remove and add the rook.
+    pub remove_sq: Square,
+    pub add_sq: Square,
+    pub remove_pc: Piece,
+    pub add_pc: Piece,
+}
+
+/// A threat that appears or disappears on the board, packed in 32 bits as in
+/// C++, since the feature set indexes its tables with the raw fields.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct DirtyThreat(pub u32);
+
+impl DirtyThreat {
+    pub const PC_SQ_OFFSET: u32 = 0;
+    pub const THREATENED_SQ_OFFSET: u32 = 8;
+    pub const THREATENED_PC_OFFSET: u32 = 16;
+    pub const PC_OFFSET: u32 = 20;
+
+    #[inline(always)]
+    pub const fn new(pc: Piece, threatened_pc: Piece, pc_sq: Square, threatened_sq: Square, add: bool) -> DirtyThreat {
+        DirtyThreat(
+            ((add as u32) << 31)
+                | ((pc as u32) << Self::PC_OFFSET)
+                | ((threatened_pc as u32) << Self::THREATENED_PC_OFFSET)
+                | ((threatened_sq as u32) << Self::THREATENED_SQ_OFFSET)
+                | ((pc_sq as u32) << Self::PC_SQ_OFFSET),
+        )
+    }
+
+    #[inline(always)]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+/// `DirtyThreatList`: a non-castling move changes at most 80 threats, a
+/// castling move at most 36. C++ adds 16 entries of slack for vector stores.
+pub const MAX_DIRTY_THREATS: usize = 96;
+
+#[derive(Clone)]
+pub struct DirtyThreats {
+    pub list: crate::misc::ValueList<DirtyThreat, MAX_DIRTY_THREATS>,
+}
+
+impl Default for DirtyThreats {
+    fn default() -> Self {
+        DirtyThreats { list: crate::misc::ValueList::new(DirtyThreat(0)) }
+    }
+}
+
+/// The pawns before and after a move, for the pawn pair features.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct DirtyPawnPairs {
+    pub before: [Bitboard; COLOR_NB],
+    pub after: [Bitboard; COLOR_NB],
+}
+
+/// Everything `do_move()` records for the NNUE accumulator updates.
+#[derive(Clone, Default)]
+pub struct Dirties {
+    pub dirty_piece: DirtyPiece,
+    pub dirty_threats: DirtyThreats,
+    pub dirty_pawn_pairs: DirtyPawnPairs,
+}
