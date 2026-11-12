@@ -292,10 +292,18 @@ fn parse_line(line: &[u8]) -> Option<(Vec<u8>, Vec<&[u8]>)> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct UciKey([u8; 5], u8);
 
+/// The notation of `move_to_string()`, written without allocating.
 fn uci_key(m: Move, chess960: bool) -> UciKey {
-    let s = move_to_string(m, chess960);
-    let mut k = UciKey([0; 5], s.len() as u8);
-    k.0[..s.len()].copy_from_slice(s.as_bytes());
+    let from = m.from_sq();
+    let mut to = m.to_sq();
+    if m.type_of() == CASTLING && !chess960 {
+        to = make_square(if to > from { FILE_G } else { FILE_C }, rank_of(from));
+    }
+    let mut k = UciKey([b'a' + file_of(from), b'1' + rank_of(from), b'a' + file_of(to), b'1' + rank_of(to), 0], 4);
+    if m.type_of() == PROMOTION {
+        k.0[4] = b" pnbrqk"[m.promotion_type() as usize];
+        k.1 = 5;
+    }
     k
 }
 
@@ -617,5 +625,29 @@ impl<'a> LineDumper<'a> {
         append_string(out, pos.fen().as_bytes());
         append_keys(out, &pos);
         out.extend_from_slice(b"}\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// uci_key() gives the notation of move_to_string() for every legal move
+    /// of a few positions with castling, en passant and promotions.
+    #[test]
+    fn uci_key_is_move_to_string() {
+        crate::attacks::init();
+        for (fen, chess960) in [
+            ("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", false),
+            ("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w HAha - 0 1", true),
+            ("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", false),
+            ("4k3/8/8/2pP4/8/8/8/4K3 w - c6 0 1", false),
+        ] {
+            let mut pos = Position::new();
+            pos.set(fen.as_bytes(), chess960).unwrap();
+            for &m in &MoveList::legal(&pos) {
+                assert_eq!(uci_key(m, chess960).as_bytes(), move_to_string(m, chess960).as_bytes());
+            }
+        }
     }
 }
