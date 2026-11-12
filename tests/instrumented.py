@@ -277,13 +277,20 @@ class TestInteractive(metaclass=OrderedClassMembers):
         self.stockfish.send_command("go depth 9")
 
         depth = 1
+        resent = False
 
         def callback(output):
-            nonlocal depth
-
-            regex = rf"info depth {depth} seldepth \d+ multipv \d+ score cp -?\d+ wdl \d+ \d+ \d+ nodes \d+ nps \d+ hashfull \d+ tbhits \d+ time \d+ pv"
+            nonlocal depth, resent
 
             if output.startswith("info depth"):
+                # The PV of the last depth may be sent once more before bestmove,
+                # when its PV had a single move and a ponder move is then found in
+                # the TT (Search::Worker::start_searching). With several threads
+                # sharing the TT this depends on scheduling.
+                if depth == 10 and not resent:
+                    depth, resent = 9, True
+
+                regex = rf"info depth {depth} seldepth \d+ multipv \d+ score cp -?\d+ wdl \d+ \d+ \d+ nodes \d+ nps \d+ hashfull \d+ tbhits \d+ time \d+ pv"
                 if not re.match(regex, output):
                     assert False
                 depth += 1
@@ -1174,6 +1181,9 @@ class TestSearchTrace(metaclass=OrderedClassMembers):
     def beforeAll(self):
         self.path = os.path.join(os.path.dirname(get_path()), "stockfish-trace")
         self.available = os.path.exists(self.path)
+        # set in CI, where a missing tracing binary must fail rather than skip
+        if os.environ.get("SEARCH_TRACE_REQUIRED") == "1":
+            assert self.available, f"no tracing binary at {self.path}"
 
     def beforeEach(self):
         self.stockfish = None

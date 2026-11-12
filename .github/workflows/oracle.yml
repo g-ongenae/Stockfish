@@ -38,15 +38,16 @@ env:
   # The engine the golden files describe: 43e01e07, bench 3464885. The fork's
   # additions (debug commands) must not change it.
   BENCH: 3464885
-  # The cases of tests/instrumented.py that concern the fork's additions, as a
-  # shell pattern on the class names. Add the classes of a new mode here.
-  INSTRUMENTED_CLASSES: "TestDump*"
+  # The cases of tests/instrumented.py that concern the fork's additions, as
+  # shell patterns on the class names, separated by spaces; each must match at
+  # least one class. Add the classes of a new mode here.
+  INSTRUMENTED_CLASSES: "TestDump* TestSearchTrace*"
 
 jobs:
   oracle:
     name: Oracle ${{ matrix.arch }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -77,13 +78,32 @@ jobs:
       - name: Bench signature
         run: ../tests/signature.sh $BENCH
 
+      # The same sources with the trace hooks (make trace-build): its bench
+      # must be the default binary's, and it is what 'verify.sh trace' runs
+      - name: Build the tracing binary
+        run: |
+          make -j4 ARCH=${{ matrix.arch }} trace-build
+          file stockfish-trace
+
+      - name: Bench signature (tracing binary)
+        run: EXE=./stockfish-trace ../tests/signature.sh $BENCH
+
       - name: Differential sample (positions)
         run: ../.github/ci/verify-sample.sh sample
 
       - name: Differential sample (lines of play)
         run: ../.github/ci/verify-sample.sh lines
 
+      - name: Search trace sample (tracing binary, all fields)
+        run: ../.github/ci/verify-sample.sh trace
+
+      - name: Search trace sample (UCI output of the default binary)
+        run: ../.github/ci/verify-sample.sh trace-uci
+
       - name: Instrumented cases (${{ env.INSTRUMENTED_CLASSES }})
+        env:
+          # TestSearchTrace fails instead of skipping without stockfish-trace
+          SEARCH_TRACE_REQUIRED: "1"
         run: |
           python3 - ./stockfish <<'EOF'
           import fnmatch, os, sys
@@ -92,10 +112,13 @@ jobs:
 
           sys.argv = ["instrumented.py", "--none", sys.argv[1]]
           t.args = t.parse_args()
-          pattern = os.environ["INSTRUMENTED_CLASSES"]
-          classes = [c for n, c in vars(t).items() if isinstance(c, type) and fnmatch.fnmatch(n, pattern)]
-          if not classes:
-              sys.exit(f"no class of instrumented.py matches {pattern}")
+          names = [n for n, c in vars(t).items() if isinstance(c, type) and n.startswith("Test")]
+          classes = []
+          for pattern in os.environ["INSTRUMENTED_CLASSES"].split():
+              matched = [n for n in names if fnmatch.fnmatch(n, pattern)]
+              if not matched:
+                  sys.exit(f"no class of instrumented.py matches {pattern}")
+              classes += [getattr(t, n) for n in matched if getattr(t, n) not in classes]
           print("classes:", ", ".join(c.__name__ for c in classes))
           framework = t.MiniTestFramework()
           framework.run(classes)
