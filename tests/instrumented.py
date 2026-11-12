@@ -277,22 +277,30 @@ class TestInteractive(metaclass=OrderedClassMembers):
         self.stockfish.send_command("go depth 9")
 
         depth = 1
-        resent = False
+        last_pv = None
 
         def callback(output):
-            nonlocal depth, resent
+            nonlocal depth, last_pv
 
             if output.startswith("info depth"):
-                # The PV of the last depth may be sent once more before bestmove,
-                # when its PV had a single move and a ponder move is then found in
-                # the TT (Search::Worker::start_searching). With several threads
-                # sharing the TT this depends on scheduling.
-                if depth == 10 and not resent:
-                    depth, resent = 9, True
+                # The last depth may be sent once more before bestmove, when its
+                # PV had a single move and a ponder move is then found in the TT
+                # (Search::Worker::start_searching). With several threads sharing
+                # the TT this depends on scheduling.
+                resend = depth == 10 and last_pv is not None and len(last_pv) == 1
+                if resend:
+                    depth = 9
 
-                regex = rf"info depth {depth} seldepth \d+ multipv \d+ score cp -?\d+ wdl \d+ \d+ \d+ nodes \d+ nps \d+ hashfull \d+ tbhits \d+ time \d+ pv"
-                if not re.match(regex, output):
+                regex = rf"info depth {depth} seldepth \d+ multipv \d+ score cp -?\d+ wdl \d+ \d+ \d+ nodes \d+ nps \d+ hashfull \d+ tbhits \d+ time \d+ pv((?: [a-h][1-8][a-h][1-8][qrbn]?)+)$"
+                match = re.match(regex, output)
+                if not match:
                     assert False
+                pv = match.group(1).split()
+                if resend:
+                    assert len(pv) == 2 and pv[0] == last_pv[0]
+                    last_pv = None
+                else:
+                    last_pv = pv
                 depth += 1
 
             if output.startswith("bestmove"):
