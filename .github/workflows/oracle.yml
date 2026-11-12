@@ -1,0 +1,112 @@
+# CI of this fork for the C++ engine, the oracle of the Rust port: the engine
+# must still be the one the golden files of tests/differential describe.
+# The upstream CI (stockfish.yml) is disabled on the fork; see the PR that
+# added this file for the reasons.
+name: "Fork: C++ oracle"
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/oracle.yml"
+      - ".github/workflows/sanitizers.yml"
+      - ".github/actions/**"
+      - ".github/ci/**"
+  pull_request:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/oracle.yml"
+      - ".github/workflows/sanitizers.yml"
+      - ".github/actions/**"
+      - ".github/ci/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The engine the golden files describe: 43e01e07, bench 3464885. The fork's
+  # additions (debug commands) must not change it.
+  BENCH: 3464885
+  # The cases of tests/instrumented.py that concern the fork's additions, as a
+  # shell pattern on the class names. Add the classes of a new mode here.
+  INSTRUMENTED_CLASSES: "TestDump*"
+
+jobs:
+  oracle:
+    name: Oracle ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # a 64-bit build with SIMD, as the golden files were made, and the
+        # portable 32-bit build: the golden files must not depend on either
+        arch: [x86-64-avx2, general-32]
+    defaults:
+      run:
+        working-directory: src
+    env:
+      CXXFLAGS: -Werror
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install the 32-bit libraries
+        if: matrix.arch == 'general-32'
+        run: sudo apt-get update && sudo apt-get install -y g++-multilib
+
+      - uses: ./.github/actions/nnue
+
+      - name: Build
+        run: |
+          make -j4 ARCH=${{ matrix.arch }} build
+          file stockfish
+
+      - name: Bench signature
+        run: ../tests/signature.sh $BENCH
+
+      - name: Differential sample (positions)
+        run: ../.github/ci/verify-sample.sh sample
+
+      - name: Differential sample (lines of play)
+        run: ../.github/ci/verify-sample.sh lines
+
+      - name: Instrumented cases (${{ env.INSTRUMENTED_CLASSES }})
+        run: |
+          python3 - ./stockfish <<'EOF'
+          import fnmatch, os, sys
+          sys.path.insert(0, os.path.abspath("../tests"))
+          import instrumented as t
+
+          sys.argv = ["instrumented.py", "--none", sys.argv[1]]
+          t.args = t.parse_args()
+          pattern = os.environ["INSTRUMENTED_CLASSES"]
+          classes = [c for n, c in vars(t).items() if isinstance(c, type) and fnmatch.fnmatch(n, pattern)]
+          if not classes:
+              sys.exit(f"no class of instrumented.py matches {pattern}")
+          print("classes:", ", ".join(c.__name__ for c in classes))
+          framework = t.MiniTestFramework()
+          framework.run(classes)
+          if framework.passed_tests == 0:
+              sys.exit("no test ran")
+          sys.exit(1 if framework.has_failed() else 0)
+          EOF
+
+  # The full tests/instrumented.py (dump cases included) under the thread and
+  # undefined behavior sanitizers, valgrind, and glibcxx assertions: the
+  # upstream file, unchanged, which only reads the repository.
+  sanitizers:
+    name: Sanitizers
+    uses: ./.github/workflows/sanitizers.yml
