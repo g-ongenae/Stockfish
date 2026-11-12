@@ -194,23 +194,25 @@ jobs:
       # The emulated CPU must reject what the target must not use; otherwise
       # running under it proves nothing. The probes are static programs
       # without libc, so that only the probed instruction can fault.
-      - name: The emulated CPU rejects MMX, SSE and SSE2 (and cmov on the Pentium)
+      - name: The emulated CPU rejects SSE, SSE2 and popcnt (and cmov on the Pentium)
         if: startsWith(matrix.target, 'i586-')
         working-directory: ${{ runner.temp }}
         run: |
-          # probe <instruction> <expected: ok|sigill>, on the CPU of $RUNNER
+          # probe <instruction> <expected: ok|sigill|any>, on the CPU of $RUNNER
           failed=0
           probe() {
             printf '.globl _start\n_start:\n  %s\n  mov $1, %%eax\n  xor %%ebx, %%ebx\n  int $0x80\n' "$1" > p.s
             gcc -m32 -nostdlib -static -o p p.s
             $RUNNER ./p 2>/dev/null && got=ok || { [ $? -eq 132 ] && got=sigill || got=other; }
             echo "$RUNNER: $1: $got, expected $2"
-            [ $got = $2 ] || failed=1
+            [ $2 = any ] || [ $got = $2 ] || failed=1
           }
           probe "nop" ok
           probe "cmovl %eax, %ebx" ${{ matrix.cmov }}
           probe "fcmovb %st(1), %st" ${{ matrix.cmov }}
-          probe "paddb %mm0, %mm0" sigill
+          # qemu 8.2 executes MMX whatever the CPU model: the scan of the next
+          # step is what rules MMX out
+          probe "paddb %mm0, %mm0" any
           probe "addps %xmm0, %xmm0" sigill
           probe "mulps %xmm1, %xmm0" sigill
           probe "paddq %xmm0, %xmm0" sigill
