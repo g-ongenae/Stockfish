@@ -72,6 +72,8 @@ pub const PIECE_VALUE: [Value; PIECE_NB] = [
 ];
 
 pub type Depth = i32;
+/// The depth of the quiescence search (the TT constants come with search).
+pub const DEPTH_QS: Depth = 0;
 
 pub type Square = u8;
 #[rustfmt::skip]

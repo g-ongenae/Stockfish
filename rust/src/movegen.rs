@@ -19,6 +19,15 @@ pub const QUIETS: GenType = 1;
 pub const EVASIONS: GenType = 2;
 pub const ALL: GenType = 3;
 
+/// `ExtMove`: a move with a score, for the move picker. C++ derives it from
+/// `Move` and compares two of them by `value` only (`operator<`); here the
+/// move is a member.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct ExtMove {
+    pub mv: Move,
+    pub value: i32,
+}
+
 /// A list of moves on the stack, as the C++ `MoveList`.
 pub struct MoveList {
     moves: [Move; MAX_MOVES],
