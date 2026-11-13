@@ -69,7 +69,9 @@ fi
 
 # The full modes compare the contents with those recorded in git as they read
 # them (--content). A data folder that says it was made for other contents (a
-# rebuild with another engine or corpus) is refused at once.
+# rebuild with another engine or corpus) is refused at once. --content goes
+# after the arguments passed on, so that none of them can replace it (argparse
+# keeps the last one, abbreviations included).
 content=()
 if [ $ext = zst ]; then
    manifest=CONTENT$([ "$kind" = .trace ] && echo .trace).sha256
@@ -97,8 +99,8 @@ echo "verify.sh ${MODE_NAME}: engine $EXE$note${RUN_PREFIX:+, run with $RUN_PREF
 
 status=0
 if [ "$kind" = .trace ]; then
-   "$PYTHON" "$DIR/search_trace.py" verify $mode "$data/standard.trace.$ext" "$data/standard.trace.jsonl.$ext" ${content[@]+"${content[@]}"} "$@" || status=1
-   "$PYTHON" "$DIR/search_trace.py" --chess960 verify $mode "$data/chess960.trace.$ext" "$data/chess960.trace.jsonl.$ext" ${content[@]+"${content[@]}"} "$@" || status=1
+   "$PYTHON" "$DIR/search_trace.py" verify $mode "$data/standard.trace.$ext" "$data/standard.trace.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
+   "$PYTHON" "$DIR/search_trace.py" --chess960 verify $mode "$data/chess960.trace.$ext" "$data/chess960.trace.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
    exit $status
 fi
 
@@ -108,7 +110,7 @@ else
    corpus=fen
 fi
 
-"$PYTHON" "$DIR/differential.py" $mode verify "$data/standard.$corpus.$ext" "$data/standard$kind.jsonl.$ext" ${content[@]+"${content[@]}"} "$@" || status=1
-"$PYTHON" "$DIR/differential.py" $mode --chess960 verify "$data/chess960.$corpus.$ext" "$data/chess960$kind.jsonl.$ext" ${content[@]+"${content[@]}"} "$@" || status=1
+"$PYTHON" "$DIR/differential.py" $mode verify "$data/standard.$corpus.$ext" "$data/standard$kind.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
+"$PYTHON" "$DIR/differential.py" $mode --chess960 verify "$data/chess960.$corpus.$ext" "$data/chess960$kind.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
 
 exit $status
