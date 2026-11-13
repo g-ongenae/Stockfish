@@ -53,23 +53,14 @@ jobs:
           persist-credentials: false
       - name: Toolchain
         run: rustup toolchain install $RUSTUP_TOOLCHAIN --profile minimal --component rustfmt,clippy
-      # Known failure: the crate has never been formatted with rustfmt's
-      # defaults (77 differences at the time this job was added). The step
-      # reports them without failing the job until the crate is formatted,
-      # or given a rustfmt.toml, in a PR of its own; then drop the next line.
-      - name: cargo fmt --check (known failure, not gating)
-        continue-on-error: true
+      # rustfmt.toml gives the style of the crate (120 columns).
+      - name: cargo fmt --check
         run: cargo fmt --check
-      # Known failure as well: clippy stops at a needless_lifetimes lint in
-      # src/position.rs, and may find more behind it. Drop the
-      # continue-on-error lines once the crate is clean.
-      - name: cargo clippy (known failure, not gating)
+      - name: cargo clippy
         if: always()
-        continue-on-error: true
         run: cargo clippy --all-targets --locked -- -D warnings
-      - name: cargo clippy --features magic32 (known failure, not gating)
+      - name: cargo clippy --features magic32
         if: always()
-        continue-on-error: true
         run: cargo clippy --all-targets --locked --features magic32 -- -D warnings
 
   native:
@@ -113,6 +104,33 @@ jobs:
             exit 0
           fi
           EXE=$PWD/target/release/stockfish ../.github/ci/verify-sample.sh lines --fields "$DUMPLINE_FIELDS"
+      # The move picker beyond what `dump` sees (TT moves, ProbCut,
+      # skip_quiet_moves, plies above 0, non-zero histories, legal() on every
+      # move value, the history update operator): a C++ driver built against
+      # the objects of src/ and the port's driver must print the same (see
+      # README.md, "What the gate does not cover"). The output of the C++
+      # driver on a subset is kept in movepick_check.expected, for the
+      # emulated targets, which cannot run the C++ code: check it here too.
+      - name: Build src/ for the C++ driver of the move picker
+        working-directory: src
+        run: make -j4 ARCH=x86-64-sse41-popcnt build
+      - name: Build the two drivers of the move picker
+        run: |
+          ARCH=x86-64-sse41-popcnt bench/build_movepick_check.sh
+          cargo build --release --locked --example movepick_check
+      - name: Move picker, C++ against Rust (sample)
+        run: |
+          EXE=target/cpp/movepick_check ./movepick_check.sh sample > movepick-cpp.txt
+          EXE=target/release/examples/movepick_check ./movepick_check.sh sample > movepick-rust.txt
+          wc -l movepick-cpp.txt
+          cmp movepick-cpp.txt movepick-rust.txt
+      - name: Move picker, movepick_check.expected is the C++ output
+        run: EXE=target/cpp/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
+      - name: Move picker with magic32
+        run: |
+          cargo build --release --locked --features magic32 --target-dir target/magic32 --example movepick_check
+          EXE=target/magic32/release/examples/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
+
       - name: Perft, full depths of tests/perft.sh
         run: |
           command -v bc || { sudo apt-get update && sudo apt-get install -y bc; }
@@ -267,6 +285,14 @@ jobs:
             exit 0
           fi
           RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh lines --fields "$DUMPLINE_FIELDS"
+      # The output of the C++ driver of the move picker, kept in
+      # movepick_check.expected (checked against the C++ code by the x86-64
+      # job): the port's driver must print the same on this target
+      - name: Move picker against the C++ driver (emulated)
+        run: |
+          cargo build --release --locked --example movepick_check
+          EXE=$PWD/target/$TARGET/release/examples/movepick_check RUN_PREFIX="$RUNNER" ./movepick_check.sh subset \
+            | cmp - movepick_check.expected
       - name: Perft (emulated), depth ${{ matrix.perft_depth }} at most
         run: |
           printf '#!/bin/sh\nexec %s %s "$@"\n' "$RUNNER" "$EXE" > emulated

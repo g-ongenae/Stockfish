@@ -6,9 +6,9 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 
 use crate::dump::{LineDumper, PositionDumper};
+use crate::movegen::MoveList;
 use crate::nnue::network::EVAL_FILE_DEFAULT_NAME;
 use crate::nnue::Network;
-use crate::movegen::MoveList;
 use crate::perft::perft_fen;
 use crate::position::{square_to_string, Position};
 use crate::types::*;
@@ -168,7 +168,10 @@ impl UciEngine {
         match token {
             b"quit" | b"stop" => return token != b"quit",
             b"uci" => {
-                let _ = writeln!(out, "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n");
+                let _ = writeln!(
+                    out,
+                    "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n"
+                );
                 let _ = writeln!(out, "option name EvalFile type string default {EVAL_FILE_DEFAULT_NAME}");
                 let _ = writeln!(out, "option name UCI_Chess960 type check default false");
                 let _ = writeln!(out, "uciok");

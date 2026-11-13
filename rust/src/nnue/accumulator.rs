@@ -267,11 +267,23 @@ fn update_accumulator_incremental<const FORWARD: bool>(
     let dirties = if FORWARD { &target.dirties } else { &computed.dirties };
 
     if FORWARD {
-        full_threats::append_changed_indices(perspective, ksq, &dirties.dirty_threats, &mut thr_removed, &mut thr_added);
+        full_threats::append_changed_indices(
+            perspective,
+            ksq,
+            &dirties.dirty_threats,
+            &mut thr_removed,
+            &mut thr_added,
+        );
         pp_3wide::append_changed_indices(perspective, ksq, &dirties.dirty_pawn_pairs, &mut thr_removed, &mut thr_added);
         k32h3::append_changed_indices(perspective, ksq, &dirties.dirty_piece, &mut psq_removed, &mut psq_added);
     } else {
-        full_threats::append_changed_indices(perspective, ksq, &dirties.dirty_threats, &mut thr_added, &mut thr_removed);
+        full_threats::append_changed_indices(
+            perspective,
+            ksq,
+            &dirties.dirty_threats,
+            &mut thr_added,
+            &mut thr_removed,
+        );
         pp_3wide::append_changed_indices(perspective, ksq, &dirties.dirty_pawn_pairs, &mut thr_added, &mut thr_removed);
         k32h3::append_changed_indices(perspective, ksq, &dirties.dirty_piece, &mut psq_added, &mut psq_removed);
     }
@@ -411,7 +423,13 @@ fn update_accumulator_hybrid(
     let mut thr_removed = ThreatIndexList::new(0);
     let mut thr_added = ThreatIndexList::new(0);
     let dirties = &target.dirties;
-    full_threats::append_changed_indices(perspective, new_ksq, &dirties.dirty_threats, &mut thr_removed, &mut thr_added);
+    full_threats::append_changed_indices(
+        perspective,
+        new_ksq,
+        &dirties.dirty_threats,
+        &mut thr_removed,
+        &mut thr_added,
+    );
     pp_3wide::append_changed_indices(perspective, new_ksq, &dirties.dirty_pawn_pairs, &mut thr_removed, &mut thr_added);
 
     let p = perspective as usize;
@@ -621,7 +639,13 @@ impl AccumulatorStack {
         0
     }
 
-    fn forward_update_incremental(&mut self, perspective: Color, pos: &Position, ft: &FeatureTransformer, begin: usize) {
+    fn forward_update_incremental(
+        &mut self,
+        perspective: Color,
+        pos: &Position,
+        ft: &FeatureTransformer,
+        begin: usize,
+    ) {
         debug_assert!(self.accumulators[begin].computed[perspective as usize]);
 
         let ksq = pos.king_square(perspective);

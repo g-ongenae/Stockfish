@@ -156,8 +156,7 @@ impl Magic {
         } else {
             let lo = (occupied as u32) & (self.mask as u32);
             let hi = ((occupied >> 32) as u32) & ((self.mask >> 32) as u32);
-            ((lo.wrapping_mul(self.magic as u32) ^ hi.wrapping_mul((self.magic >> 32) as u32))
-                >> self.shift) as usize
+            ((lo.wrapping_mul(self.magic as u32) ^ hi.wrapping_mul((self.magic >> 32) as u32)) >> self.shift) as usize
         }
     }
 }
@@ -183,6 +182,7 @@ fn boxed_square_table() -> Box<[[Bitboard; SQUARE_NB]; SQUARE_NB]> {
 /// Port of the C++ `init_magics()`: finds the magics by trial with the same
 /// seeds, and fills the attack table of the given piece type.
 fn init_magics(pt: PieceType, table: &mut [Bitboard], base: u32, magics: &mut [[Magic; 2]; SQUARE_NB]) {
+    #[rustfmt::skip]
     const SEEDS: [[u64; RANK_NB]; 2] = [
         [8977, 44560, 54343, 38998, 5731, 95205, 104912, 17020],
         [728, 10316, 55013, 32803, 12281, 15100, 16645, 255],

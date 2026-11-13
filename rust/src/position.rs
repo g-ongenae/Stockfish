@@ -29,9 +29,8 @@ pub struct Zobrist {
     pub no_pawns: Key,
 }
 
-const PIECES: [Piece; 12] = [
-    W_PAWN, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING, B_PAWN, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING,
-];
+const PIECES: [Piece; 12] =
+    [W_PAWN, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING, B_PAWN, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING];
 
 const PIECE_TO_CHAR: &[u8; 15] = b" PNBRQK  pnbrqk";
 
@@ -239,7 +238,7 @@ struct FenStream<'a> {
     fail: bool,
 }
 
-impl<'a> FenStream<'a> {
+impl FenStream<'_> {
     /// `ss >> c` with `noskipws`.
     fn get(&mut self) -> Option<u8> {
         if self.fail {
@@ -847,9 +846,7 @@ impl Position {
                 }
             } else if token == b'/' {
                 if file != FILE_NB as i32 {
-                    return Err(PositionSetError::new(
-                        "Invalid FEN. Trying to end rank when not at the end of it.",
-                    ));
+                    return Err(PositionSetError::new("Invalid FEN. Trying to end rank when not at the end of it."));
                 }
                 rank -= 1;
                 file = FILE_A as i32;
@@ -873,9 +870,7 @@ impl Position {
         }
 
         if rank != RANK_1 as i32 || file != FILE_NB as i32 {
-            return Err(PositionSetError::new(
-                "Invalid FEN. Board state encoding ended but cursor not at end.",
-            ));
+            return Err(PositionSetError::new("Invalid FEN. Board state encoding ended but cursor not at end."));
         }
 
         if self.pieces_pt(PAWN) & (RANK_1_BB | RANK_8_BB) != 0 {
@@ -1013,10 +1008,9 @@ impl Position {
                 // And only if a pawn can take without leaving its king in check
                 while enpassant && pawns != 0 && !legal_ep {
                     let s = pop_lsb(&mut pawns);
-                    legal_ep = self.attackers_to(self.king_square(us), occ ^ square_bb(s))
-                        & self.pieces_c(them)
-                        & !target
-                        == 0;
+                    legal_ep =
+                        self.attackers_to(self.king_square(us), occ ^ square_bb(s)) & self.pieces_c(them) & !target
+                            == 0;
                 }
             } else {
                 return Err(PositionSetError::new("Invalid FEN. Invalid en-passant square."));
@@ -1052,8 +1046,7 @@ impl Position {
         self.chess960 = is_chess960;
         self.set_state();
 
-        if self.attackers_to_sq(self.king_square(not_color(self.side_to_move))) & self.pieces_c(self.side_to_move)
-            != 0
+        if self.attackers_to_sq(self.king_square(not_color(self.side_to_move))) & self.pieces_c(self.side_to_move) != 0
         {
             return Err(PositionSetError::new("Unsupported position. King can be captured."));
         }
@@ -1214,11 +1207,7 @@ impl Position {
         let rights = [(WHITE_OO, b'A', 'K'), (WHITE_OOO, b'A', 'Q'), (BLACK_OO, b'a', 'k'), (BLACK_OOO, b'a', 'q')];
         for (cr, base, letter) in rights {
             if self.can_castle(cr) {
-                s.push(if self.chess960 {
-                    (base + file_of(self.castling_rook_square(cr))) as char
-                } else {
-                    letter
-                });
+                s.push(if self.chess960 { (base + file_of(self.castling_rook_square(cr))) as char } else { letter });
             }
         }
         if !self.can_castle(ANY_CASTLING) {
@@ -1341,8 +1330,7 @@ impl Position {
             }
             // A non-king move is legal if and only if it is not pinned or it
             // is moving along the ray towards or away from the king.
-            self.blockers_for_king(us) & square_bb(from) == 0
-                || line_bb(from, to) & self.pieces_cp(us, KING) != 0
+            self.blockers_for_king(us) & square_bb(from) == 0 || line_bb(from, to) & self.pieces_cp(us, KING) != 0
         } else {
             // A king move is legal if the destination is not attacked
             square_bb(to) & self.threats_by(ALL_PIECES) == 0
@@ -1382,7 +1370,8 @@ impl Position {
                 let b = (self.pieces() ^ square_bb(from) ^ square_bb(capsq)) | square_bb(to);
                 let (bishop_attacks, rook_attacks) = both_attacks_bb(self.king_square(them), b);
 
-                (rook_attacks & self.pieces_cp2(us, QUEEN, ROOK)) | (bishop_attacks & self.pieces_cp2(us, QUEEN, BISHOP))
+                (rook_attacks & self.pieces_cp2(us, QUEEN, ROOK))
+                    | (bishop_attacks & self.pieces_cp2(us, QUEEN, BISHOP))
                     != 0
             }
             _ => {
@@ -1991,10 +1980,7 @@ impl Position {
             self.piece_on(self.king_square(WHITE)) == W_KING && self.piece_on(self.king_square(BLACK)) == B_KING,
             "pos_is_ok: Default"
         );
-        assert!(
-            self.ep_square() == SQ_NONE || relative_rank_of(us, self.ep_square()) == RANK_6,
-            "pos_is_ok: Default"
-        );
+        assert!(self.ep_square() == SQ_NONE || relative_rank_of(us, self.ep_square()) == RANK_6, "pos_is_ok: Default");
         assert!(self.attackers_to_sq(self.king_square(them)) & self.pieces_c(us) == 0, "pos_is_ok: Kings");
         let ep = self.ep_square();
         if ep != SQ_NONE {
@@ -2011,7 +1997,9 @@ impl Position {
             );
         }
         assert!(
-            self.pieces_pt(PAWN) & (RANK_1_BB | RANK_8_BB) == 0 && self.count(WHITE, PAWN) <= 8 && self.count(BLACK, PAWN) <= 8,
+            self.pieces_pt(PAWN) & (RANK_1_BB | RANK_8_BB) == 0
+                && self.count(WHITE, PAWN) <= 8
+                && self.count(BLACK, PAWN) <= 8,
             "pos_is_ok: Pawns"
         );
         assert!(

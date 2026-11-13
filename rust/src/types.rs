@@ -65,12 +65,15 @@ pub const B_QUEEN: Piece = 13;
 pub const B_KING: Piece = 14;
 pub const PIECE_NB: usize = 16;
 
+#[rustfmt::skip]
 pub const PIECE_VALUE: [Value; PIECE_NB] = [
     VALUE_ZERO, PAWN_VALUE, KNIGHT_VALUE, BISHOP_VALUE, ROOK_VALUE, QUEEN_VALUE, VALUE_ZERO, VALUE_ZERO,
     VALUE_ZERO, PAWN_VALUE, KNIGHT_VALUE, BISHOP_VALUE, ROOK_VALUE, QUEEN_VALUE, VALUE_ZERO, VALUE_ZERO,
 ];
 
 pub type Depth = i32;
+/// The depth of the quiescence search (the TT constants come with search).
+pub const DEPTH_QS: Depth = 0;
 
 pub type Square = u8;
 #[rustfmt::skip]

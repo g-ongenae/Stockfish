@@ -1,12 +1,12 @@
 //! Port of `src/dump.cpp`: the `dump` debug command, one line of JSON per
 //! position, compared with the C++ engine by `tests/differential`.
 //!
-//! The members are written in the same order and format as in C++. Those of
-//! the move picker, not ported yet (`order_main_shallow`, `order_main_deep`,
-//! `order_qsearch`), are left out rather than faked.
+//! The members are written in the same order and format as in C++.
 
 use crate::evaluate;
+use crate::history::*;
 use crate::movegen::MoveList;
+use crate::movepick::{Histories, MovePicker};
 use crate::nnue::{AccumulatorCaches, AccumulatorStack, Network};
 use crate::position::Position;
 use crate::types::*;
@@ -98,13 +98,29 @@ pub fn see_value(pos: &Position, m: Move) -> i32 {
     lo
 }
 
-/// `PositionDumper`: owns the position it works on and its NNUE scratch
-/// state, so the dump never touches the state of the engine.
+/// The depths of the move pickers of `order_main_shallow` and
+/// `order_main_deep` (`PositionDumper::ShallowDepth` and `DeepDepth`).
+pub const SHALLOW_DEPTH: Depth = 1;
+pub const DEEP_DEPTH: Depth = 16;
+
+/// The history tables given to the move picker (`PositionDumper::Tables`
+/// with the NNUE state below): all the entries are 0 and never updated.
+struct DumpHistories {
+    main_history: Box<ButterflyHistory>,
+    low_ply_history: Box<LowPlyHistory>,
+    capture_history: Box<CapturePieceToHistory>,
+    continuation_history: Box<PieceToHistory>,
+    shared_history: SharedHistories,
+}
+
+/// `PositionDumper`: owns the position it works on, its NNUE scratch state
+/// and its history tables, so the dump never touches the state of the engine.
 pub struct PositionDumper<'a> {
     network: &'a Network,
     pos: Position,
     accumulators: AccumulatorStack,
     caches: AccumulatorCaches,
+    histories: DumpHistories,
 }
 
 impl<'a> PositionDumper<'a> {
@@ -114,6 +130,13 @@ impl<'a> PositionDumper<'a> {
             pos: Position::new(),
             accumulators: AccumulatorStack::new(),
             caches: AccumulatorCaches::new(network),
+            histories: DumpHistories {
+                main_history: new_butterfly_history(),
+                low_ply_history: new_low_ply_history(),
+                capture_history: new_capture_piece_to_history(),
+                continuation_history: new_piece_to_history(),
+                shared_history: SharedHistories::new(1),
+            },
         }
     }
 
@@ -199,7 +222,36 @@ impl<'a> PositionDumper<'a> {
             pos.undo_move(m);
         });
 
-        // Not ported yet: "order_main_shallow", "order_main_deep", "order_qsearch"
+        // Move ordering of the move picker without a TT move: in the main
+        // search at two depths, and in the quiescence search.
+        let t = &self.histories;
+        let cont_hist: &PieceToHistory = &t.continuation_history;
+        let h = Histories {
+            main_history: &t.main_history,
+            low_ply_history: &t.low_ply_history,
+            capture_history: &t.capture_history,
+            continuation_history: [cont_hist; 6],
+            shared_history: &t.shared_history,
+        };
+        for (name, depth) in
+            [("order_main_shallow", SHALLOW_DEPTH), ("order_main_deep", DEEP_DEPTH), ("order_qsearch", DEPTH_QS)]
+        {
+            let mut mp = MovePicker::new(pos, Move::none(), depth, 0);
+
+            append_key(out, name);
+            out.push(b'[');
+            loop {
+                let m = mp.next_move(pos, &h);
+                if m == Move::none() {
+                    break;
+                }
+                if out.last() != Some(&b'[') {
+                    out.push(b',');
+                }
+                append_string(out, move_to_string(m, is_chess960).as_bytes());
+            }
+            out.push(b']');
+        }
 
         out.push(b'}');
     }

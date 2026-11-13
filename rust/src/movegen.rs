@@ -19,6 +19,15 @@ pub const QUIETS: GenType = 1;
 pub const EVASIONS: GenType = 2;
 pub const ALL: GenType = 3;
 
+/// `ExtMove`: a move with a score, for the move picker. C++ derives it from
+/// `Move` and compares two of them by `value` only (`operator<`); here the
+/// move is a member.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct ExtMove {
+    pub mv: Move,
+    pub value: i32,
+}
+
 /// A list of moves on the stack, as the C++ `MoveList`.
 pub struct MoveList {
     moves: [Move; MAX_MOVES],
@@ -276,7 +285,8 @@ pub fn generate<const TYPE: GenType>(pos: &Position, list: &mut MoveList) {
             let rook_square = pos.castling_rook_square(cr);
             let to = relative_square(us, if rook_square > ksq { SQ_G1 } else { SQ_C1 });
 
-            if between_bb(ksq, to) & pos.threats_by(ALL_PIECES) == 0 && pos.blockers_for_king(us) & square_bb(rook_square) == 0
+            if between_bb(ksq, to) & pos.threats_by(ALL_PIECES) == 0
+                && pos.blockers_for_king(us) & square_bb(rook_square) == 0
             {
                 list.push(Move::make(CASTLING, ksq, rook_square, KNIGHT));
             }

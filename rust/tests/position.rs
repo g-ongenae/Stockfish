@@ -141,7 +141,8 @@ fn fen_round_trip_and_errors() {
         // The en passant square is only kept when the capture is legal. In
         // two of the positions it would expose the king, and the C++ engine
         // prints these FENs without it.
-        let expected = fen.replace("2KPp2r/8/8/8/8 w - e6", "2KPp2r/8/8/8/8 w - -").replace("1K6/8/8 w - d6", "1K6/8/8 w - -");
+        let expected =
+            fen.replace("2KPp2r/8/8/8/8 w - e6", "2KPp2r/8/8/8/8 w - -").replace("1K6/8/8 w - d6", "1K6/8/8 w - -");
         assert_eq!(set(fen, false).fen(), expected);
     }
     for fen in CHESS960 {
@@ -156,11 +157,17 @@ fn fen_round_trip_and_errors() {
         ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w", "Invalid FEN. Expected whitespace after side to move."),
         ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KX - 0 1", "Invalid FEN. Expected castling rights. Got: X"),
         ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq z6 0 1", "Invalid FEN. Invalid en-passant square."),
-        ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 40000 1", "Unsupported position. Rule50 counter out of range."),
+        (
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 40000 1",
+            "Unsupported position. Rule50 counter out of range.",
+        ),
         ("k7/8/8/8/8/8/8/KK6 w - - 0 1", "Unsupported position. Incorrect number of kings."),
         ("k7/8/8/8/8/8/8/KQQQQQQQ w - - 0 1", "Unsupported position. King can be captured."),
         ("rnbqkbnr/ppppp1pp/8/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f3 0 3", "Invalid FEN. Invalid en-passant square."),
-        (" rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Invalid FEN. Board state encoding ended but cursor not at end."),
+        (
+            " rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "Invalid FEN. Board state encoding ended but cursor not at end.",
+        ),
     ];
     for &(fen, msg) in errors {
         let err = Position::new().set(fen.as_bytes(), false).unwrap_err();
