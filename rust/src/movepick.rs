@@ -144,6 +144,12 @@ impl MovePicker {
         self.set(pos, ttm, stage, PROBCUT, th, 0, 0);
     }
 
+    /// A picker to be renewed before use: for the pickers a search keeps,
+    /// allocated once.
+    pub fn empty_for_search() -> MovePicker {
+        MovePicker::empty()
+    }
+
     fn empty() -> MovePicker {
         MovePicker {
             tt_move: Move::none(),

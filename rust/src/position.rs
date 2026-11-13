@@ -307,6 +307,7 @@ impl FenStream<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct Position {
     board: [Piece; SQUARE_NB],
     by_type_bb: [Bitboard; PIECE_TYPE_NB],

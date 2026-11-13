@@ -57,6 +57,13 @@ impl AccumulatorCaches {
         caches
     }
 
+    /// A cache to be cleared with a network before use (`clear()`): for a
+    /// worker created before the network is loaded.
+    pub fn empty() -> AccumulatorCaches {
+        let empty = Entry { accumulation: [0; L1], pieces: [NO_PIECE; SQUARE_NB], piece_bb: 0 };
+        AccumulatorCaches { entries: vec![empty; k32h3::NUM_BLOCKS * SQUARE_NB * COLOR_NB].into_boxed_slice() }
+    }
+
     pub fn clear(&mut self, network: &super::Network) {
         for e in self.entries.iter_mut() {
             e.clear(&network.feature_transformer().biases);

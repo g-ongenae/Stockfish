@@ -155,6 +155,38 @@ impl<T: Fill> Fill for [T] {
     }
 }
 
+/// `fill(v)` and `operator=(T)` through a shared reference, on the shared
+/// tables, with relaxed stores (as C++, whose workers each clear their part
+/// of a table shared with the other threads of their NUMA node).
+pub trait FillShared {
+    fn fill_shared(&self, v: i16);
+}
+
+impl<const D: i32> FillShared for AtomicStatsEntry<D> {
+    #[inline]
+    fn fill_shared(&self, v: i16) {
+        self.set(v);
+    }
+}
+
+impl<T: FillShared, const N: usize> FillShared for [T; N] {
+    #[inline]
+    fn fill_shared(&self, v: i16) {
+        for e in self.iter() {
+            e.fill_shared(v);
+        }
+    }
+}
+
+impl<T: FillShared> FillShared for [T] {
+    #[inline]
+    fn fill_shared(&self, v: i16) {
+        for e in self.iter() {
+            e.fill_shared(v);
+        }
+    }
+}
+
 /// `StatsType`, the second index of the continuation history block.
 pub type StatsType = usize;
 pub const NO_CAPTURES: StatsType = 0;
@@ -191,6 +223,17 @@ pub struct CorrectionBundle {
     pub minor: AtomicStatsEntry<CORRECTION_HISTORY_LIMIT>,
     pub non_pawn_white: AtomicStatsEntry<CORRECTION_HISTORY_LIMIT>,
     pub non_pawn_black: AtomicStatsEntry<CORRECTION_HISTORY_LIMIT>,
+}
+
+impl FillShared for CorrectionBundle {
+    /// `operator=(T val)`: sets the four entries.
+    #[inline]
+    fn fill_shared(&self, v: i16) {
+        self.pawn.set(v);
+        self.minor.set(v);
+        self.non_pawn_white.set(v);
+        self.non_pawn_black.set(v);
+    }
 }
 
 impl Fill for CorrectionBundle {
@@ -238,15 +281,19 @@ pub struct DynStats<T> {
     data: Box<[T]>,
 }
 
-impl<T: Fill> DynStats<T> {
+impl<T> DynStats<T> {
     fn new(size: usize, entry: impl FnMut(usize) -> T) -> Self {
         DynStats { data: (0..size).map(entry).collect::<Vec<T>>().into_boxed_slice() }
     }
+}
 
+impl<T: FillShared> DynStats<T> {
     /// `clear_range(value, threadIdx, numaTotal)`: thread `thread_idx` of
     /// `numa_total` sets its share of the entries to `value`. The bounds are
-    /// computed in 64 bits as in C++.
-    pub fn clear_range(&mut self, value: i16, thread_idx: usize, numa_total: usize) {
+    /// computed in 64 bits as in C++. Through a shared reference, with
+    /// relaxed stores, so that each thread can clear its share of a table
+    /// shared between threads (`Search::Worker::clear`).
+    pub fn clear_range(&self, value: i16, thread_idx: usize, numa_total: usize) {
         let size = self.data.len();
         let mut start = (thread_idx as u64 * size as u64 / numa_total as u64) as usize;
         debug_assert!(start < size);
@@ -257,7 +304,7 @@ impl<T: Fill> DynStats<T> {
         };
 
         while start < end {
-            self.data[start].fill_all(value);
+            self.data[start].fill_shared(value);
             start += 1;
         }
     }
@@ -341,6 +388,12 @@ impl ContinuationHistoryBlock {
     /// Every table, in the order of the C++ layout.
     pub fn tables(&self) -> &[PieceToHistory] {
         &self.table
+    }
+
+    /// Every entry of every table set to `v`, through a shared reference
+    /// (relaxed stores), as thread 0 of each NUMA node does in C++.
+    pub fn fill_shared(&self, v: i16) {
+        self.table.fill_shared(v);
     }
 }
 
