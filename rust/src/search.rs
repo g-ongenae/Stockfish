@@ -1829,6 +1829,11 @@ impl Worker {
         // weren't in check) and is false otherwise. The improving flag is used
         // in various pruning heuristics. Similarly, opponentWorsening is true
         // if our static evaluation is better for us than at the last ply.
+        // Read here for the next lines only: from step 10 on, C++ reads
+        // ss->staticEval again at each use, and so does the port, since the
+        // null move verification search runs at this ply, on this entry of
+        // the stack, and leaves there its own corrected evaluation (the
+        // correction history may have changed in the meantime).
         let static_eval = self.stack[ss].static_eval;
         let mut improving = static_eval > self.stack[ss - 2].static_eval;
         let opponent_worsening = static_eval > -self.stack[ss - 1].static_eval;
@@ -1844,7 +1849,7 @@ impl Worker {
             depth += 1;
             trace!(self, TRACE, event1("hindsight_extension", "depth", depth as i64));
         }
-        if prior_reduction >= 2 && depth >= 2 && static_eval + self.stack[ss - 1].static_eval > 166 {
+        if prior_reduction >= 2 && depth >= 2 && self.stack[ss].static_eval + self.stack[ss - 1].static_eval > 166 {
             depth -= 1;
             trace!(self, TRACE, event1("hindsight_reduction", "depth", depth as i64));
         }
@@ -1930,7 +1935,7 @@ impl Worker {
 
             // Use static evaluation difference to improve quiet move ordering
             if prev_move.is_ok() && !self.stack[ss - 1].in_check && !prior_capture {
-                let eval_diff = (-(self.stack[ss - 1].static_eval + static_eval)).clamp(-189, 194) + 60;
+                let eval_diff = (-(self.stack[ss - 1].static_eval + self.stack[ss].static_eval)).clamp(-189, 194) + 60;
                 self.main_history[not_color(us) as usize][prev_move.raw() as usize].update(eval_diff * 11);
                 let pawn = !tt_hit && type_of(pos.piece_on(prev_sq)) != PAWN && prev_move.type_of() != PROMOTION;
                 if pawn {
@@ -1977,7 +1982,7 @@ impl Worker {
 
             // Step 10. Null move search with verification search
             if cut_node
-                && static_eval + 50 * self.stack[ss].prior_nmp_fail_high
+                && self.stack[ss].static_eval + 50 * self.stack[ss].prior_nmp_fail_high
                     >= beta - 13 * depth - 47 * improving as i32 + 365
                 && excluded_move == Move::none()
                 && pos.non_pawn_material(us) != 0
@@ -1988,7 +1993,8 @@ impl Worker {
 
                 // Null move dynamic reduction based on depth
                 // Odd threads reduce one ply less
-                let mut r: Depth = 7 + depth / 3 + ((static_eval - beta) / 256).max(0) - (self.thread_idx & 1) as i32;
+                let mut r: Depth =
+                    7 + depth / 3 + ((self.stack[ss].static_eval - beta) / 256).max(0) - (self.thread_idx & 1) as i32;
                 r -= self.seek_mate as i32 * r / 2;
                 self.do_null_move(pos, ss);
                 trace!(self, TRACE, null_move(r));
@@ -2026,7 +2032,7 @@ impl Worker {
                 }
             }
 
-            improving |= static_eval >= beta;
+            improving |= self.stack[ss].static_eval >= beta;
 
             // Step 11. Internal iterative reductions
             // At sufficient depth, reduce depth for PV/Cut nodes without a
@@ -2045,7 +2051,7 @@ impl Worker {
                 debug_assert!(prob_cut_beta < VALUE_INFINITE && prob_cut_beta > beta);
 
                 let slot = picker_slot(ply, excluded_move != Move::none());
-                self.pickers[slot].renew_probcut(pos, tt_data.mv, prob_cut_beta - static_eval);
+                self.pickers[slot].renew_probcut(pos, tt_data.mv, prob_cut_beta - self.stack[ss].static_eval);
                 let prob_cut_depth = depth - if improving { 5 } else { 3 };
                 trace!(self, TRACE, event2("probcut", "beta", prob_cut_beta as i64, "depth", prob_cut_depth as i64));
 
@@ -2220,7 +2226,7 @@ impl Worker {
 
                     // Futility pruning for captures
                     if !gives_check && lmr_depth < 8 {
-                        let futility_value = static_eval
+                        let futility_value = self.stack[ss].static_eval
                             + 234
                             + 247 * lmr_depth
                             + PIECE_VALUE[captured_piece as usize]
@@ -2261,7 +2267,10 @@ impl Worker {
                     // (*Scaler): Generally, lower divisors scale well
                     lmr_depth += history / lmr_divisor(depth);
 
-                    let futility_value = static_eval + 119 * lmr_depth + 90 * (static_eval > alpha) as i32 + 164;
+                    let futility_value = self.stack[ss].static_eval
+                        + 119 * lmr_depth
+                        + 90 * (self.stack[ss].static_eval > alpha) as i32
+                        + 164;
 
                     // Futility pruning: parent node
                     // (*Scaler): Generally, more frequent futility pruning
@@ -2356,8 +2365,8 @@ impl Worker {
                     self.tt_move_history.update(-421 - 110 * depth);
                     self.trace_ttmove_update::<TRACE>(-421 - 110 * depth);
 
-                    if !in_check && value > static_eval {
-                        let bonus = ((value - static_eval) * 664 / 1024)
+                    if !in_check && value > self.stack[ss].static_eval {
+                        let bonus = ((value - self.stack[ss].static_eval) * 664 / 1024)
                             .clamp(-CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
                         self.update_correction_history::<TRACE>(pos, ss, bonus);
                     }
@@ -2658,7 +2667,7 @@ impl Worker {
             bonus_scale -= self.stack[ss - 1].stat_score / 98;
             bonus_scale += (59 * depth).min(420);
             bonus_scale += 186 * (self.stack[ss - 1].move_count > 9) as i32;
-            bonus_scale += 142 * (!in_check && best_value <= static_eval - 106) as i32;
+            bonus_scale += 142 * (!in_check && best_value <= self.stack[ss].static_eval - 106) as i32;
             bonus_scale +=
                 159 * (!self.stack[ss - 1].in_check && best_value <= -self.stack[ss - 1].static_eval - 68) as i32;
 
@@ -2740,10 +2749,12 @@ impl Worker {
         // error direction matches whether we are above/below bounds.
         if !in_check
             && !(best_move != Move::none() && pos.capture(best_move))
-            && (best_value > static_eval) == (best_move != Move::none())
+            && (best_value > self.stack[ss].static_eval) == (best_move != Move::none())
         {
-            let bonus = ((best_value - static_eval) * depth * (if best_move != Move::none() { 12 } else { 18 }) / 128)
-                .clamp(-CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+            let bonus =
+                ((best_value - self.stack[ss].static_eval) * depth * (if best_move != Move::none() { 12 } else { 18 })
+                    / 128)
+                    .clamp(-CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
             self.update_correction_history::<TRACE>(pos, ss, 1061 * bonus / 1024);
         }
 

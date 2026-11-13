@@ -376,16 +376,16 @@ impl UciEngine {
     /// `bench`: searches the positions of the benchmark (or of a file) and
     /// prints the total of the nodes searched, the bench signature.
     fn bench<'a>(&mut self, tokens: impl Iterator<Item = &'a [u8]>) {
-        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-        use std::sync::Arc;
+        use std::sync::{Arc, Mutex};
 
-        let nodes_searched = Arc::new(AtomicU64::new(0));
+        // (a Mutex, not an AtomicU64: 32-bit PowerPC has no 64-bit atomics)
+        let nodes_searched = Arc::new(Mutex::new(0u64));
         let saved = self.engine.update_context();
         let ns = nodes_searched.clone();
         self.engine.set_update_context(UpdateContext {
             on_update_no_moves: Box::new(on_update_no_moves),
             on_update_full: Box::new(move |i: &InfoFull| {
-                ns.store(i.nodes, Relaxed);
+                *ns.lock().unwrap() = i.nodes;
                 on_update_full(i);
             }),
             on_iter: Box::new(on_iter),
@@ -414,13 +414,13 @@ impl UciEngine {
 
                     if limits.perft != 0 {
                         let n = self.perft(limits.perft);
-                        nodes_searched.store(n, Relaxed);
+                        *nodes_searched.lock().unwrap() = n;
                     } else {
                         self.engine.go(limits);
                         self.engine.wait_for_search_finished();
                     }
 
-                    nodes += nodes_searched.swap(0, Relaxed);
+                    nodes += std::mem::take(&mut *nodes_searched.lock().unwrap());
                 } else {
                     println!("info string eval is not ported");
                 }

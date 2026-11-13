@@ -83,6 +83,7 @@ def main():
     ap.add_argument("--option", action="append", default=[], help="NAME=VALUE, set on both engines")
     ap.add_argument("--every", type=int, default=1, help="only every N-th session")
     ap.add_argument("--max-report", type=int, default=5)
+    ap.add_argument("--verbose", action="store_true", help="a line per search")
     args = ap.parse_args()
 
     exe = os.environ.get("EXE")
@@ -105,6 +106,8 @@ def main():
                 continue
             got, expected = (e.search(command) for e in engines)
             searches += 1
+            if args.verbose:
+                print(f"session {n}: {command}: {'same' if got == expected else 'DIFFERS'}, {len(expected)} lines", flush=True)
             lines += len(expected)
             if got != expected:
                 differ += 1
