@@ -36,7 +36,7 @@ import subprocess
 import sys
 import tempfile
 
-from differential import ROOT, MISSING, open_read, open_write, open_output, corpus_lines
+from differential import ROOT, MISSING, open_read, open_write, open_output, corpus_lines, expect_content, check_content
 
 DEFAULT_TRACE_EXE = ROOT / "src" / "stockfish-trace"
 DEFAULT_UCI_EXE = ROOT / "src" / "stockfish"
@@ -357,6 +357,8 @@ def differences(expected, actual, fields):
 
 
 def cmd_verify(args):
+    if args.content:
+        expect_content(args.content, args.corpus, args.golden)
     fields = args.fields.split(",") if args.fields else None
     if args.uci:
         other = [f for f in fields or [] if f not in UCI_FIELDS]
@@ -400,6 +402,7 @@ def cmd_verify(args):
         # The engine must not print more than the corpus asks for
         for _ in actual_groups:
             pass
+    check_content()
 
     unknown = [f for f in fields or [] if f not in known and f not in UCI_FIELDS]
     if unknown:
@@ -637,6 +640,9 @@ def main():
     verify.add_argument("--uci", action="store_true", help="drive the engine through plain UCI commands")
     verify.add_argument("--fields", help="comma separated list of the only members to compare")
     verify.add_argument("--max-report", type=int, default=10, help="searches to detail (default 10)")
+    verify.add_argument(
+        "--content", metavar="MANIFEST", help="fail unless the corpus and the golden file hold the contents MANIFEST records"
+    )
     verify.set_defaults(run=cmd_verify)
 
     bisect = sub.add_parser("bisect")

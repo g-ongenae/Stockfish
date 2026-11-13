@@ -72,26 +72,48 @@ machine, outside every checkout, in the folder named by `STOCKFISH_SHARED`
 | --- | --- |
 | `data/` | What the full modes read: `{standard,chess960}.{fen,jsonl,lines,lines.jsonl,trace,trace.jsonl}.zst`, the `CONTENT.sha256` and `CONTENT.trace.sha256` the scripts wrote (the same as in git), `FILES.sha256` (the compressed files), and `downloads/`, the Lichess dumps. |
 | `oracle/` | `stockfish` and `stockfish-trace` built from a recorded commit, the network `nn-18cd32e11a9c.nnue`, and `MANIFEST` (commit, build commands, compiler, bench signatures, checksums). |
+| `venv/` | A Python environment made from `requirements.txt` (python-chess 1.11.2), for `make_corpus.sh` only, given to it as `PYTHON=$S/venv/bin/python`. |
 
 The rule each script follows (`shared.sh` defines it):
 
 - `verify.sh` in a full mode reads the golden files from `DATA` if set, else
   from `tests/differential/data` if it holds those of the mode, else from
-  `$STOCKFISH_SHARED/data`. It refuses a folder whose `CONTENT*.sha256`
-  differs from the one in git, and a corpus that gives no position, line or
-  search to compare.
+  `$STOCKFISH_SHARED/data`. It hashes the corpus and the golden files,
+  decompressed, as it compares them, and fails unless they are the contents
+  that `CONTENT.sha256` or `CONTENT.trace.sha256` *in git* records, whatever
+  the folder holds besides (`--content` of `differential.py verify` and
+  `search_trace.py verify`; no second pass over the data, and `--fields`
+  changes nothing to it). It also refuses at once a folder whose own
+  `CONTENT*.sha256` differs from git's, and a corpus that gives no position,
+  line or search to compare. After `make_corpus.sh --update` or
+  `make_trace_corpus.sh --update`, git's manifest is the new one, so the full
+  modes check the new contents. The sample modes check the files in git and
+  hash nothing.
 - The binary checked is `EXE`, else `src/stockfish` (`src/stockfish-trace` for
   `trace` and `trace-full`) of the checkout. It is never taken from the shared
   folder unless `EXE` names it, so that a check of another engine cannot end up
   comparing the reference with its own output. `verify.sh` prints the binary
-  and the folder it uses on stderr before anything else, and says when the
-  binary is one of the shared folder's.
+  and the folder it uses on stderr before it runs the engine (a missing or
+  refused folder stops it earlier, with a message saying so), and says when
+  the binary is one of the shared folder's.
 - `make_corpus.sh` and `make_trace_corpus.sh` write into `DATA` (default
-  `tests/differential/data`) only, and refuse a `DATA` inside the shared
-  folder. They read their inputs from it when the checkout lacks them: the
+  `tests/differential/data`) only. Before writing anything they refuse a
+  `DATA` that is the shared folder or inside it once symbolic links and `..`
+  are resolved (with Python's `os.path.realpath`, so also through components
+  that do not exist yet), whether the shared folder exists or not, and a
+  `DATA` that already holds a symbolic link, which a write could follow out
+  of it (`DATA` itself may be a link to a folder elsewhere). They read their inputs from it when the checkout lacks them: the
   Lichess dumps for `make_corpus.sh`, which then downloads nothing, the
   corpora of positions and lines for `make_trace_corpus.sh`.
-- The shared folder is read-only on disk, folders included.
+- `make_corpus.sh` runs `PYTHON` (default `python3`) and stops, before it
+  downloads or writes anything, if that cannot import python-chess. It never looks for the
+  shared environment by itself: name it with `PYTHON=`. The other scripts,
+  `verify.sh` included, need the standard library only.
+- The shared folder is read-only on disk, folders included. That, not the
+  refusal above, is what protects it from everything else (a link made while
+  a script runs, another program).
+- With neither `STOCKFISH_SHARED` nor `HOME` set there is no shared folder:
+  nothing is read from it or refused for it.
 
 A new worktree needs only this:
 
@@ -107,8 +129,29 @@ A new worktree needs only this:
     ln -s "$S/oracle/nn-18cd32e11a9c.nnue" src/
     cd src && make -j2 build && make -j2 trace-build
 
+To rebuild the corpora, which is only done on purpose (a rebuild that
+differs from what git records fails, see below), the shared folder holds all
+the inputs, the Python environment included, so that nothing is downloaded or
+installed. `DATA` must be a folder outside the shared one, and outside the
+checkout to keep the worktree small:
+
+    S=${STOCKFISH_SHARED:-$HOME/.local/share/stockfish-fork}
+    export PYTHON=$S/venv/bin/python DATA=/a/folder/outside/the/shared/one
+    EXE=$S/oracle/stockfish       tests/differential/make_corpus.sh         # 5 min
+    EXE=$S/oracle/stockfish-trace tests/differential/make_trace_corpus.sh   # 7 min
+
+This was checked on 2026-11-13 from a fresh checkout of `d540d33b`: nothing
+was downloaded (the dumps were read from `$S/data/downloads`), both scripts
+ended with "The corpus and the golden files are the recorded ones", the
+samples in git were left unchanged, and the 12 `.zst` files built were
+byte-identical to those of `$S/data`. Install nothing into the system Python
+or a checkout for this. A venv holds absolute paths, so on another machine
+make a new one outside the checkout (`python3 -m venv <dir>` and
+`<dir>/bin/pip install -r tests/differential/requirements.txt`) and set
+`PYTHON` to its interpreter.
+
 CI does not use the shared folder: it checks the samples kept in git with
-binaries it builds.
+binaries it builds, and never rebuilds the corpora.
 
 ## The dump command
 
@@ -846,8 +889,9 @@ In git:
 | `shared.sh` | Sourced by `make_corpus.sh`, `verify.sh` and `make_trace_corpus.sh`: the shared folder (`STOCKFISH_SHARED`) and the refusal to write into it. |
 | `make_trace_corpus.sh` | Rebuilds the corpus of the search trace from the corpora of positions and lines, with `src/stockfish-trace`, in about 7 minutes; checks it against `CONTENT.trace.sha256` the same way (`--update` records). |
 | `search_trace.py` | `select`, `generate`, `verify` (`--uci` for plain UCI), `bisect`, `sample` and `stats` for the search trace. The records are grouped by session, and each group must have the shape its session implies (searches numbered from 1, one per `go`, or an error ending the session), in the engine output as in the golden file. Standard library only; imports the file helpers of `differential.py`. |
-| `extract_positions.py` | PGN on stdin to FENs, or with `--lines` to lines of play, on stdout. Needs python-chess (`pip install chess`, 1.11.2 was used). |
+| `extract_positions.py` | PGN on stdin to FENs, or with `--lines` to lines of play, on stdout. Needs python-chess, pinned in `requirements.txt` (1.11.2). |
 | `differential.py` | `generate`, `verify`, `canonicalize`, `sample` and `stats`, with `--lines` for lines of play. With `--lines`, the records are parsed before they are grouped by line, and each group must have the shape its corpus line implies (plies 0 to `n` in order, then a walk back over `n` moves with `n` entries in each list, or a single error), in the engine output as in the golden file; `generate` and `sample` refuse to write anything else. Standard library only. |
+| `requirements.txt` | The Python packages of `make_corpus.sh`: python-chess 1.11.2, for `extract_positions.py`. The shared folder's `venv/` is made from it. |
 | `SHA256SUMS` | Checksums of the two dumps. |
 | `CONTENT.sha256` | Checksums of the uncompressed corpus and golden files, to tell whether a rebuild gave the same ones. |
 | `CONTENT.trace.sha256` | The same for the search trace. |
