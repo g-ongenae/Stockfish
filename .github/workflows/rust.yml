@@ -154,6 +154,13 @@ jobs:
           wc -l tt-cpp.txt
           cmp tt-cpp.txt tt-rust.txt
           cmp tt-cpp.txt tt_check.expected
+      # What the corpus of the trace does not reach, against the C++ engine
+      # built above: mates, stalemates, the 50-move rule close to 100,
+      # searchmoves, go mate, a search of 11M nodes, the bench positions to
+      # depth 18 and 20; and the hash sizes, UCI_ShowWDL and MultiPV on part
+      # of the sample (README.md, "What the gates do not see")
+      - name: Search, direct comparisons with the C++ engine
+        run: REF=$PWD/../src/stockfish ./search_check.sh compare target/release/stockfish
       - name: Move picker, movepick_check.expected is the C++ output
         run: EXE=target/cpp/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
       - name: Move picker with magic32
@@ -179,7 +186,7 @@ jobs:
   emulated:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -197,7 +204,6 @@ jobs:
             cmov: ok
             file: "ELF 32-bit LSB.*Intel 80386"
             perft_depth: 5
-            trace_sessions: 1000
           # Static with musl, so that nothing but the port, the Rust standard
           # library and musl runs: on qemu's plain Pentium model (no cmov).
           - name: i586 musl static (Pentium, no cmov, no SSE)
@@ -208,7 +214,6 @@ jobs:
             cmov: sigill
             file: "ELF 32-bit LSB.*Intel 80386.*statically linked"
             perft_depth: 5
-            trace_sessions: 1000
           # 32-bit ARM, hard float, no NEON (the target's default)
           - name: ARMv7 32-bit
             target: armv7-unknown-linux-gnueabihf
@@ -217,7 +222,6 @@ jobs:
             runner: qemu-arm -L /usr/arm-linux-gnueabihf
             file: "ELF 32-bit LSB.*ARM"
             perft_depth: 5
-            trace_sessions: 1000
           # big-endian, and 32-bit as well
           - name: PowerPC 32-bit big-endian
             target: powerpc-unknown-linux-gnu
@@ -226,7 +230,6 @@ jobs:
             runner: qemu-ppc -L /usr/powerpc-linux-gnu
             file: "ELF 32-bit MSB.*PowerPC"
             perft_depth: 5
-            trace_sessions: 1000
     env:
       TARGET: ${{ matrix.target }}
       RUNNER: ${{ matrix.runner }}
@@ -327,15 +330,15 @@ jobs:
           cargo build --release --locked --example movepick_check
           EXE=$PWD/target/$TARGET/release/examples/movepick_check RUN_PREFIX="$RUNNER" ./movepick_check.sh subset \
             | cmp - movepick_check.expected
-      # The search under emulation: a deterministic subset of the sample of
-      # the search trace when the whole does not fit the job's time (the
-      # sessions of `search_trace.py sample`, chosen by a hash), the deepest
-      # searches of the full corpus, the transposition table driver against
-      # the C++ output kept in tt_check.expected, and the bench signature
-      - name: Search trace, UCI output (emulated), ${{ matrix.trace_sessions }} sessions per set
-        run: RUN_PREFIX="$RUNNER" ./search_check.sh trace-subset ${{ matrix.trace_sessions }} --uci
-      - name: Search trace, events and state (emulated), ${{ matrix.trace_sessions }} sessions per set
-        run: RUN_PREFIX="$RUNNER" ./search_check.sh trace-subset ${{ matrix.trace_sessions }}
+      # The search under emulation: the whole sample of the search trace
+      # (UCI output, then events and state; 2 to 7 minutes per step on these
+      # targets), the deepest searches of the full corpus, the transposition
+      # table driver against the C++ output kept in tt_check.expected, and the
+      # bench signature
+      - name: Search trace sample, UCI output (emulated)
+        run: RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh trace-uci
+      - name: Search trace sample, events and state (emulated)
+        run: RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh trace
       - name: Deepest searches of the full corpus (emulated)
         run: RUN_PREFIX="$RUNNER" ./search_check.sh deep $EXE
       - name: Transposition table against the C++ driver (emulated)

@@ -7,10 +7,10 @@
 #   ./search_check.sh deep <engine>           the deepest searches of the full
 #                                             corpus (tests/search/deep.*),
 #                                             all fields of the trace
-#   ./search_check.sh trace-subset <n> [--uci] the first n sessions by hash of
-#                                             each set of the trace sample
-#                                             (search_trace.py sample), EXE the
-#                                             engine; all of them if n is larger
+#   REF=<engine> ./search_check.sh compare <engine>
+#                                             direct comparisons over UCI with a
+#                                             reference (bench/compare_uci.py):
+#                                             what the trace does not reach
 #   ./search_check.sh tt <driver>             runs a transposition table driver
 #                                             (bench/tt_check.cpp or
 #                                             examples/tt_check.rs): what
@@ -51,22 +51,24 @@ deep)
     EXE=$exe RUN_PREFIX="$RUN_PREFIX" $PYTHON $TRACE --chess960 verify tests/search/deep.chess960.trace.gz tests/search/deep.chess960.trace.jsonl.gz | tee -a "$out"
     check_ok "$out"
     ;;
-trace-subset)
-    n=${2:?count}
-    uci=${3:-}
-    : "${EXE:?EXE must name the engine}"
-    tmp=$(mktemp -d)
-    out=$tmp/out
-    for set in standard chess960; do
-        flag=""
-        [ $set = chess960 ] && flag=--chess960
-        $PYTHON $TRACE sample $SAMPLE/$set.trace.gz $SAMPLE/$set.trace.jsonl.gz "$n" "$tmp/$set.trace" "$tmp/$set.trace.jsonl" > /dev/null
-        echo "$set: $(wc -l < "$tmp/$set.trace") sessions"
-        # shellcheck disable=SC2086
-        EXE=$EXE RUN_PREFIX="$RUN_PREFIX" $PYTHON $TRACE $flag verify $uci "$tmp/$set.trace" "$tmp/$set.trace.jsonl" | tee -a "$out"
+compare)
+    # against a reference binary over UCI (REF, default the shared folder's
+    # oracle/stockfish): the sessions of tests/search, then part of the trace
+    # sample with other hash sizes, UCI_ShowWDL and MultiPV
+    exe=$(cd "$(dirname "${2:?engine}")" && pwd)/$(basename "$2")
+    c="$PYTHON bench/compare_uci.py"
+    export EXE=$exe
+    $c tests/search/extra.sessions
+    $c tests/search/extra960.sessions --chess960
+    $c tests/search/long.sessions
+    $c tests/search/long960.sessions --chess960
+    for h in 1 3 7 64; do
+        $c $SAMPLE/standard.trace.gz --option Hash=$h --every 4
     done
-    check_ok "$out"
-    rm -rf "$tmp"
+    $c $SAMPLE/chess960.trace.gz --option Hash=5 --every 3 --chess960
+    $c $SAMPLE/standard.trace.gz --option UCI_ShowWDL=true --every 4
+    $c $SAMPLE/standard.trace.gz --option MultiPV=3 --every 6
+    $c $SAMPLE/chess960.trace.gz --option MultiPV=4 --option UCI_ShowWDL=true --every 6 --chess960
     ;;
 tt)
     drv=${2:?driver}
@@ -74,7 +76,7 @@ tt)
     $RUN_PREFIX "$drv" 100000 1 2 3 5 7 16 33
     ;;
 *)
-    echo "usage: $0 bench|deep <engine> | trace-subset <n> [--uci] | tt <driver>" >&2
+    echo "usage: $0 bench|deep|compare <engine> | tt <driver>" >&2
     exit 2
     ;;
 esac
