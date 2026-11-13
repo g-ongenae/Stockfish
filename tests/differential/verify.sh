@@ -24,7 +24,11 @@
 # The full modes read the golden files from DATA if set, else from
 # tests/differential/data if it holds those of the mode, else from the shared
 # folder, $STOCKFISH_SHARED/data (default ~/.local/share/stockfish-fork/data,
-# see shared.sh). The binary and the folder used are printed on stderr first.
+# see shared.sh). The binary and the folder used are printed on stderr before
+# the engine runs. A full mode fails unless the corpus and the golden files hold,
+# decompressed, the contents recorded in git (CONTENT.sha256,
+# CONTENT.trace.sha256): they are hashed as they are compared, so a gate cannot
+# pass on other data, whatever the data folder holds besides.
 
 DIR=$(cd "$(dirname "$0")" && pwd)
 PYTHON=${PYTHON:-python3}
@@ -50,7 +54,7 @@ if [ $ext = zst ] && [ -z "$data" ]; then
    if [ -f "$DIR/data/standard$kind.jsonl.zst" ]; then
       data=$DIR/data
    else
-      data=$SHARED_DATA
+      data=${SHARED_DATA:-$DIR/data}
    fi
 fi
 
@@ -63,14 +67,19 @@ if [ ! -f "$data/standard$kind.jsonl.$ext" ]; then
    exit 1
 fi
 
-# A data folder made for other contents than those recorded in git (a rebuild
-# with another engine or corpus) is refused
+# The full modes compare the contents with those recorded in git as they read
+# them (--content). A data folder that says it was made for other contents (a
+# rebuild with another engine or corpus) is refused at once. --content goes
+# after the arguments passed on, so that none of them can replace it (argparse
+# keeps the last one, abbreviations included).
+content=()
 if [ $ext = zst ]; then
    manifest=CONTENT$([ "$kind" = .trace ] && echo .trace).sha256
    if [ -f "$data/$manifest" ] && ! cmp -s "$data/$manifest" "$DIR/$manifest"; then
       echo "$data/$manifest differs from $DIR/$manifest: these golden files are not the ones recorded in git."
       exit 1
    fi
+   content=(--content "$DIR/$manifest")
 fi
 
 # The binary checked: EXE, else the one of this checkout. Said on stderr, with
@@ -90,8 +99,8 @@ echo "verify.sh ${MODE_NAME}: engine $EXE$note${RUN_PREFIX:+, run with $RUN_PREF
 
 status=0
 if [ "$kind" = .trace ]; then
-   "$PYTHON" "$DIR/search_trace.py" verify $mode "$data/standard.trace.$ext" "$data/standard.trace.jsonl.$ext" "$@" || status=1
-   "$PYTHON" "$DIR/search_trace.py" --chess960 verify $mode "$data/chess960.trace.$ext" "$data/chess960.trace.jsonl.$ext" "$@" || status=1
+   "$PYTHON" "$DIR/search_trace.py" verify $mode "$data/standard.trace.$ext" "$data/standard.trace.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
+   "$PYTHON" "$DIR/search_trace.py" --chess960 verify $mode "$data/chess960.trace.$ext" "$data/chess960.trace.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
    exit $status
 fi
 
@@ -101,7 +110,7 @@ else
    corpus=fen
 fi
 
-"$PYTHON" "$DIR/differential.py" $mode verify "$data/standard.$corpus.$ext" "$data/standard$kind.jsonl.$ext" "$@" || status=1
-"$PYTHON" "$DIR/differential.py" $mode --chess960 verify "$data/chess960.$corpus.$ext" "$data/chess960$kind.jsonl.$ext" "$@" || status=1
+"$PYTHON" "$DIR/differential.py" $mode verify "$data/standard.$corpus.$ext" "$data/standard$kind.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
+"$PYTHON" "$DIR/differential.py" $mode --chess960 verify "$data/chess960.$corpus.$ext" "$data/chess960$kind.jsonl.$ext" "$@" ${content[@]+"${content[@]}"} || status=1
 
 exit $status

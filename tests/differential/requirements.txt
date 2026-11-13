@@ -1,0 +1,4 @@
+# Python packages of make_corpus.sh (extract_positions.py); the other scripts
+# use the standard library only. The shared folder holds an environment made
+# from this file: $STOCKFISH_SHARED/venv (README.md, "The shared folder").
+chess==1.11.2
