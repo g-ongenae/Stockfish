@@ -34,6 +34,7 @@ import json
 import lzma
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -50,8 +51,77 @@ MISSING = object()
 
 
 
+# The contents some files must have: absolute path -> sha256 of the decompressed
+# bytes (expect_content), and the digests of the complete reads of them so far
+EXPECTED_CONTENT = {}
+READ_CONTENT = {}
+
+
+class HashingReader:
+    """Passes the bytes read from a file through a hash."""
+
+    def __init__(self, f, digest):
+        self.f, self.digest = f, digest
+
+    def __iter__(self):
+        for line in self.f:
+            self.digest.update(line)
+            yield line
+
+    def read(self, *args):
+        data = self.f.read(*args)
+        self.digest.update(data)
+        return data
+
+
+def expect_content(manifest, *paths):
+    """Requires each of paths to hold, decompressed, the content that a manifest
+    (CONTENT.sha256, CONTENT.trace.sha256) records for its name, the file name
+    without .zst, .gz or .xz. open_read() hashes them as they are read, and
+    check_content() compares at the end, so that nothing is read twice."""
+    entries = {}
+    with open(manifest) as f:
+        for line in f:
+            if line.strip():
+                digest, name = line.split()
+                entries[name] = digest
+    for path in paths:
+        name = re.sub(r"\.(zst|gz|xz)$", "", os.path.basename(path))
+        if name not in entries:
+            sys.exit(f"{manifest} records no content for {name}")
+        EXPECTED_CONTENT[os.path.abspath(path)] = (entries[name], manifest)
+
+
+def check_content():
+    """Ends the program if a file given to expect_content() was not read through,
+    or does not hold the content recorded."""
+    for path, (digest, manifest) in EXPECTED_CONTENT.items():
+        seen = READ_CONTENT.get(path)
+        if not seen:
+            sys.exit(f"FAILED {path}: not read through, its content is unchecked")
+        if seen != {digest}:
+            sys.exit(f"FAILED {path}: not the content recorded in {manifest}, so these are not the golden files of git")
+
+
 @contextlib.contextmanager
 def open_read(path):
+    """Opens a possibly compressed file for reading lines of bytes. A file given
+    to expect_content() is hashed as it is read, and read to its end."""
+    key = os.path.abspath(str(path))
+    if key not in EXPECTED_CONTENT:
+        with open_raw(path) as f:
+            yield f
+        return
+    digest = hashlib.sha256()
+    with open_raw(path) as f:
+        reader = HashingReader(f, digest)
+        yield reader
+        reader.read()
+    READ_CONTENT.setdefault(key, set()).add(digest.hexdigest())
+
+
+@contextlib.contextmanager
+def open_raw(path):
     """Opens a possibly compressed file for reading lines of bytes."""
     path = str(path)
     if path.endswith(".zst"):
@@ -219,6 +289,8 @@ def describe(field, expected, actual, moves):
 
 
 def cmd_verify(args):
+    if args.content:
+        expect_content(args.content, args.corpus, args.golden)
     if args.lines:
         cmd_verify_lines(args)
         return
@@ -261,6 +333,7 @@ def cmd_verify(args):
                         field, expected.get(field, MISSING), actual.get(field, MISSING), expected.get("moves", [])
                     )
                     print(f"  {line}")
+    check_content()
 
     what = f"fields {args.fields}" if fields else "all fields"
     if failed:
@@ -422,6 +495,7 @@ def cmd_verify_lines(args):
         # The engine must not print more than the corpus asks for
         for _ in actual_groups:
             pass
+    check_content()
 
     # A misspelt field would otherwise compare equal everywhere
     unknown = [f for f in fields or [] if f not in known]
@@ -695,6 +769,9 @@ def main():
     verify.add_argument("golden")
     verify.add_argument("--fields", help="comma separated list of the only fields to compare")
     verify.add_argument("--max-report", type=int, default=10, help="positions to detail (default 10)")
+    verify.add_argument(
+        "--content", metavar="MANIFEST", help="fail unless the corpus and the golden file hold the contents MANIFEST records"
+    )
     verify.set_defaults(run=cmd_verify)
 
     canonicalize = commands.add_parser("canonicalize")

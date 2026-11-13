@@ -50,7 +50,7 @@ fi
 # The corpora of positions and lines: in DATA, else all four in the shared folder
 INPUT=$DATA
 for f in standard.fen standard.lines chess960.fen chess960.lines; do
-   [ -f "$DATA/$f.zst" ] || INPUT=$SHARED_DATA
+   [ -f "$DATA/$f.zst" ] || INPUT=${SHARED_DATA:-$DATA}
 done
 for f in standard.fen standard.lines chess960.fen chess960.lines; do
    if [ ! -f "$INPUT/$f.zst" ]; then

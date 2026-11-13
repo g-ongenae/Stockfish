@@ -46,8 +46,9 @@ Unless the user asks for it:
   not create `tests/differential/data` there.
 - Do not download the network again (`make net` without a link, see below)
   and do not rebuild the corpora (`make_corpus.sh`, `make_trace_corpus.sh`).
-- Do not write into the shared folder. It is read-only on disk; the scripts
-  refuse it as an output.
+- Do not write into the shared folder. It is read-only on disk, and the
+  corpus scripts refuse a `DATA` inside it or holding symbolic links
+  (`tests/differential/README.md`, "The shared folder", says exactly what).
 - When the user does ask for the corpora to be rebuilt, rebuild them with the
   shared folder alone: its Python environment (`PYTHON=$S/venv/bin/python`,
   python-chess as pinned in `tests/differential/requirements.txt`), its
@@ -81,3 +82,6 @@ EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh lines-full --f
 Always set `EXE` for a full gate: without it `verify.sh` checks the
 checkout's `src/stockfish`, never the shared one, and a gate of the port run
 without `EXE` would check the C++ engine instead.
+A full gate also fails unless the corpus and golden files it reads hold the
+contents recorded in git (`CONTENT.sha256`, `CONTENT.trace.sha256`), so it
+cannot pass on other or stale data.

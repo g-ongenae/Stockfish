@@ -50,7 +50,7 @@ fi
 if ! "$PYTHON" -c 'import chess' 2> /dev/null; then
    echo "$PYTHON cannot import python-chess (chess==1.11.2, see requirements.txt)."
    echo "Set PYTHON to an interpreter that has it, such as the shared folder's:"
-   echo "  PYTHON=$STOCKFISH_SHARED/venv/bin/python"
+   echo "  PYTHON=${STOCKFISH_SHARED:-<the shared folder>}/venv/bin/python"
    echo "Elsewhere, make an environment outside the checkout from requirements.txt;"
    echo "do not install it into the system Python or a checkout (README.md, \"The shared folder\")."
    exit 1
@@ -62,7 +62,7 @@ echo "make_corpus.sh: engine $EXE; output in $DATA"
 # Where a dump is: in DATA, else in the shared folder, else to be downloaded into DATA
 dump_path()
 {
-  if [ ! -f "$DATA/downloads/$1" ] && [ -f "$SHARED_DATA/downloads/$1" ]; then
+  if [ ! -f "$DATA/downloads/$1" ] && [ -n "$SHARED_DATA" ] && [ -f "$SHARED_DATA/downloads/$1" ]; then
     echo "$SHARED_DATA/downloads/$1"
   else
     echo "$DATA/downloads/$1"
