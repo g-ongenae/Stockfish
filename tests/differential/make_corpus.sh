@@ -16,8 +16,13 @@
 # unless called with --update, which records the new ones: do that on purpose
 # only, when the engine or its network changed.
 #
-# Needs curl, zstd, sha256sum and python3 with python-chess (pip install chess).
-# EXE selects the engine (default ../../src/stockfish), PYTHON the interpreter.
+# Needs curl, zstd, sha256sum and a Python with python-chess, pinned in
+# requirements.txt. EXE selects the engine (default ../../src/stockfish), PYTHON
+# the interpreter (default python3). The script never looks for one by itself:
+# where the system Python lacks python-chess, use the environment of the shared
+# folder rather than installing anything (README.md, "The shared folder"):
+#   S=${STOCKFISH_SHARED:-$HOME/.local/share/stockfish-fork}
+#   PYTHON=$S/venv/bin/python EXE=$S/oracle/stockfish DATA=<not in $S> make_corpus.sh
 
 set -euo pipefail
 
@@ -39,6 +44,15 @@ SAMPLE_LINES_CHESS960=50
 
 if [ ! -x "$EXE" ]; then
    echo "No engine at $EXE, build it first (cd src && make -j2 build) or set EXE."
+   exit 1
+fi
+
+if ! "$PYTHON" -c 'import chess' 2> /dev/null; then
+   echo "$PYTHON cannot import python-chess (chess==1.11.2, see requirements.txt)."
+   echo "Set PYTHON to an interpreter that has it, such as the shared folder's:"
+   echo "  PYTHON=$STOCKFISH_SHARED/venv/bin/python"
+   echo "Elsewhere, make an environment outside the checkout from requirements.txt;"
+   echo "do not install it into the system Python or a checkout (README.md, \"The shared folder\")."
    exit 1
 fi
 

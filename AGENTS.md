@@ -48,6 +48,13 @@ Unless the user asks for it:
   and do not rebuild the corpora (`make_corpus.sh`, `make_trace_corpus.sh`).
 - Do not write into the shared folder. It is read-only on disk; the scripts
   refuse it as an output.
+- When the user does ask for the corpora to be rebuilt, rebuild them with the
+  shared folder alone: its Python environment (`PYTHON=$S/venv/bin/python`,
+  python-chess as pinned in `tests/differential/requirements.txt`), its
+  Lichess dumps and its oracle, into a `DATA` outside the shared folder and
+  the worktree (commands in `tests/differential/README.md`, "The shared
+  folder"). Do not install python-chess or anything else into the system
+  Python or a worktree for it.
 
 How a fresh worktree uses it:
 
