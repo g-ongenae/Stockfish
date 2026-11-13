@@ -4,8 +4,12 @@
 # lines of play, dumps them with the engine and refreshes the small samples kept
 # in git.
 #
-# The dumps are never decompressed to disk. The bulk data goes to
-# tests/differential/data (not in git, about 240 MB). It takes about 10 minutes.
+# The dumps are never decompressed to disk. The bulk data goes to DATA (default
+# tests/differential/data, not in git, about 240 MB). It takes about 10 minutes.
+# The dumps are read from DATA/downloads, else from the shared folder
+# ($STOCKFISH_SHARED/data/downloads, see shared.sh), and downloaded into
+# DATA/downloads only when neither has them. The script never writes into the
+# shared folder: a DATA inside it is refused.
 #
 # The corpus and the golden files built are compared with the checksums recorded
 # in CONTENT.sha256. If they differ the script fails and leaves the sample alone,
@@ -18,9 +22,11 @@
 set -euo pipefail
 
 DIR=$(cd "$(dirname "$0")" && pwd)
+. "$DIR/shared.sh"
 DATA=${DATA:-$DIR/data}
 PYTHON=${PYTHON:-python3}
 export EXE=${EXE:-$DIR/../../src/stockfish}
+refuse_shared_output "$DATA"
 
 UPDATE=no
 [ "${1:-}" = "--update" ] && UPDATE=yes
@@ -37,17 +43,29 @@ if [ ! -x "$EXE" ]; then
 fi
 
 mkdir -p "$DATA/downloads"
+echo "make_corpus.sh: engine $EXE; output in $DATA"
+
+# Where a dump is: in DATA, else in the shared folder, else to be downloaded into DATA
+dump_path()
+{
+  if [ ! -f "$DATA/downloads/$1" ] && [ -f "$SHARED_DATA/downloads/$1" ]; then
+    echo "$SHARED_DATA/downloads/$1"
+  else
+    echo "$DATA/downloads/$1"
+  fi
+}
 
 # 1. Download the dumps listed in SHA256SUMS, unless already there, and check them
-while read -r _ file; do
+while read -r sum file; do
    name=$(basename "$file")
    case $name in
       *chess960*) url=https://database.lichess.org/chess960/$name ;;
       *) url=https://database.lichess.org/standard/$name ;;
    esac
-   [ -f "$DATA/$file" ] || curl -sSfL -o "$DATA/$file" "$url"
+   path=$(dump_path "$name")
+   [ -f "$path" ] || curl -sSfL -o "$path" "$url"
+   echo "$sum  $path" | sha256sum -c
 done < "$DIR/SHA256SUMS"
-(cd "$DATA" && sha256sum -c "$DIR/SHA256SUMS")
 
 # 2. Extract the positions and dump them
 build_set()
@@ -55,7 +73,7 @@ build_set()
   name=$1 dump=$2
   shift 2
 
-  zstd -dc "$DATA/downloads/$dump" | "$PYTHON" "$DIR/extract_positions.py" "$@" > "$DATA/$name.candidates.fen"
+  zstd -dc "$(dump_path "$dump")" | "$PYTHON" "$DIR/extract_positions.py" "$@" > "$DATA/$name.candidates.fen"
   "$PYTHON" "$DIR/differential.py" "$@" canonicalize "$DATA/$name.candidates.fen" "$DATA/$name.fen.zst"
   rm "$DATA/$name.candidates.fen"
 
@@ -71,7 +89,7 @@ build_lines()
   name=$1 dump=$2
   shift 2
 
-  zstd -dc "$DATA/downloads/$dump" | "$PYTHON" "$DIR/extract_positions.py" --lines "$@" \
+  zstd -dc "$(dump_path "$dump")" | "$PYTHON" "$DIR/extract_positions.py" --lines "$@" \
      | zstd -q -19 > "$DATA/$name.lines.zst"
   "$PYTHON" "$DIR/differential.py" --lines "$@" generate "$DATA/$name.lines.zst" "$DATA/$name.lines.jsonl.zst"
 }

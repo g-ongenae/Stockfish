@@ -41,6 +41,11 @@ functional change to search changes those of the search trace.
     # another binary, and only what it implements so far
     EXE=/path/to/engine ../tests/differential/verify.sh full --fields fen,key,moves
 
+The full modes need the corpora and golden files that `make_corpus.sh` and
+`make_trace_corpus.sh` build (260 MB, not in git). On a machine that already
+has them in its shared folder, nothing needs to be built: see "The shared
+folder" below.
+
 `verify.sh` prints, for the first positions that differ, which field differs and
 where, then the number of differing positions per field, and exits with 1:
 
@@ -56,6 +61,54 @@ understand `setoption name UCI_Chess960 value true`, `dump <file>` and `quit`,
 and print the dump lines on its standard output, exactly one per position. Lines
 that do not start with `{` are ignored. A harness in another language can also just read the golden
 files and compare in process.
+
+## The shared folder
+
+The full corpora, their golden files and the reference binaries live once per
+machine, outside every checkout, in the folder named by `STOCKFISH_SHARED`
+(default `~/.local/share/stockfish-fork`):
+
+| Path | Holds |
+| --- | --- |
+| `data/` | What the full modes read: `{standard,chess960}.{fen,jsonl,lines,lines.jsonl,trace,trace.jsonl}.zst`, the `CONTENT.sha256` and `CONTENT.trace.sha256` the scripts wrote (the same as in git), `FILES.sha256` (the compressed files), and `downloads/`, the Lichess dumps. |
+| `oracle/` | `stockfish` and `stockfish-trace` built from a recorded commit, the network `nn-18cd32e11a9c.nnue`, and `MANIFEST` (commit, build commands, compiler, bench signatures, checksums). |
+
+The rule each script follows (`shared.sh` defines it):
+
+- `verify.sh` in a full mode reads the golden files from `DATA` if set, else
+  from `tests/differential/data` if it holds those of the mode, else from
+  `$STOCKFISH_SHARED/data`. It refuses a folder whose `CONTENT*.sha256`
+  differs from the one in git, and a corpus that gives no position, line or
+  search to compare.
+- The binary checked is `EXE`, else `src/stockfish` (`src/stockfish-trace` for
+  `trace` and `trace-full`) of the checkout. It is never taken from the shared
+  folder unless `EXE` names it, so that a check of another engine cannot end up
+  comparing the reference with its own output. `verify.sh` prints the binary
+  and the folder it uses on stderr before anything else, and says when the
+  binary is one of the shared folder's.
+- `make_corpus.sh` and `make_trace_corpus.sh` write into `DATA` (default
+  `tests/differential/data`) only, and refuse a `DATA` inside the shared
+  folder. They read their inputs from it when the checkout lacks them: the
+  Lichess dumps for `make_corpus.sh`, which then downloads nothing, the
+  corpora of positions and lines for `make_trace_corpus.sh`.
+- The shared folder is read-only on disk, folders included.
+
+A new worktree needs only this:
+
+    S=${STOCKFISH_SHARED:-$HOME/.local/share/stockfish-fork}
+    EXE=$S/oracle/stockfish       tests/differential/verify.sh full
+    EXE=$S/oracle/stockfish       tests/differential/verify.sh lines-full
+    EXE=$S/oracle/stockfish-trace tests/differential/verify.sh trace-full
+    EXE=$S/oracle/stockfish       tests/differential/verify.sh trace-uci-full
+
+    # to build the C++ engine of the worktree, with the network of the shared
+    # folder rather than a download: make net validates the file the link
+    # points to (sha256) and leaves it alone
+    ln -s "$S/oracle/nn-18cd32e11a9c.nnue" src/
+    cd src && make -j2 build && make -j2 trace-build
+
+CI does not use the shared folder: it checks the samples kept in git with
+binaries it builds.
 
 ## The dump command
 
@@ -790,6 +843,7 @@ In git:
 | --- | --- |
 | `make_corpus.sh` | Rebuilds everything below from the dumps, in about 20 minutes on a slow machine. Fails, leaving the sample alone, if what it built is not what `CONTENT.sha256` records; `--update` records the new files instead. |
 | `verify.sh` | Verifies a binary against the sample or the full golden files, of positions, of lines or of searches (`trace`, `trace-full`, and through plain UCI `trace-uci`, `trace-uci-full`). |
+| `shared.sh` | Sourced by `make_corpus.sh`, `verify.sh` and `make_trace_corpus.sh`: the shared folder (`STOCKFISH_SHARED`) and the refusal to write into it. |
 | `make_trace_corpus.sh` | Rebuilds the corpus of the search trace from the corpora of positions and lines, with `src/stockfish-trace`, in about 7 minutes; checks it against `CONTENT.trace.sha256` the same way (`--update` records). |
 | `search_trace.py` | `select`, `generate`, `verify` (`--uci` for plain UCI), `bisect`, `sample` and `stats` for the search trace. The records are grouped by session, and each group must have the shape its session implies (searches numbered from 1, one per `go`, or an error ending the session), in the engine output as in the golden file. Standard library only; imports the file helpers of `differential.py`. |
 | `extract_positions.py` | PGN on stdin to FENs, or with `--lines` to lines of play, on stdout. Needs python-chess (`pip install chess`, 1.11.2 was used). |
@@ -799,7 +853,8 @@ In git:
 | `CONTENT.trace.sha256` | The same for the search trace. |
 | `sample/` | 4,000 + 1,000 positions drawn uniformly from the two sets, with their golden lines (2.7 MB), 100 + 50 lines of play (`*.lines.gz`, 2.0 MB), and 290 + 75 sessions of the search trace (`*.trace.gz`, 983 searches, 0.5 MB: 250 + 60 drawn uniformly, plus 40 + 15 games). Also checked by `tests/instrumented.py`. |
 
-Not in git, in `tests/differential/data` (260 MB):
+Not in git, in `tests/differential/data` when built there, or in the shared
+folder (260 MB):
 
 | File | Size | Uncompressed |
 | --- | ---: | ---: |

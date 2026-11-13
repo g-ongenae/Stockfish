@@ -416,6 +416,8 @@ def cmd_verify(args):
         if not args.uci and "events" in by_field:
             print("  run search_trace.py bisect on a session to see the first event that differs")
         sys.exit(1)
+    if num_searches == 0:
+        sys.exit(f"FAILED {args.corpus}: no search compared, the corpus is empty")
     print(f"OK {args.corpus}: {num_sessions} sessions, {num_searches} searches match ({what})")
 
 

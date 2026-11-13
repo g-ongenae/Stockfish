@@ -4,8 +4,11 @@
 # make_corpus.sh, runs them with the tracing binary and refreshes the small
 # sample kept in git.
 #
-# The bulk data goes to tests/differential/data (not in git, 7 MB). It takes
-# about 7 minutes on a slow machine.
+# The bulk data goes to DATA (default tests/differential/data, not in git,
+# 7 MB). It takes about 7 minutes on a slow machine. The corpora of positions
+# and lines are read from DATA, else from the shared folder
+# ($STOCKFISH_SHARED/data, see shared.sh). The script never writes into the
+# shared folder: a DATA inside it is refused.
 #
 # The corpus and the golden files built are compared with the checksums recorded
 # in CONTENT.trace.sha256. If they differ the script fails and leaves the sample
@@ -18,9 +21,11 @@
 set -euo pipefail
 
 DIR=$(cd "$(dirname "$0")" && pwd)
+. "$DIR/shared.sh"
 DATA=${DATA:-$DIR/data}
 PYTHON=${PYTHON:-python3}
 export EXE=${EXE:-$DIR/../../src/stockfish-trace}
+refuse_shared_output "$DATA"
 
 UPDATE=no
 [ "${1:-}" = "--update" ] && UPDATE=yes
@@ -42,12 +47,19 @@ if [ ! -x "$EXE" ]; then
    exit 1
 fi
 
+# The corpora of positions and lines: in DATA, else all four in the shared folder
+INPUT=$DATA
 for f in standard.fen standard.lines chess960.fen chess960.lines; do
-   if [ ! -f "$DATA/$f.zst" ]; then
-      echo "No $DATA/$f.zst, run make_corpus.sh first."
+   [ -f "$DATA/$f.zst" ] || INPUT=$SHARED_DATA
+done
+for f in standard.fen standard.lines chess960.fen chess960.lines; do
+   if [ ! -f "$INPUT/$f.zst" ]; then
+      echo "No $DATA/$f.zst nor $SHARED_DATA/$f.zst, run make_corpus.sh first."
       exit 1
    fi
 done
+mkdir -p "$DATA"
+echo "make_trace_corpus.sh: engine $EXE; corpora read from $INPUT; output in $DATA"
 
 # 1. Choose the sessions and run them
 build_set()
@@ -55,7 +67,7 @@ build_set()
   name=$1 positions=$2 games=$3
   shift 3
 
-  "$PYTHON" "$DIR/search_trace.py" "$@" select "$DATA/$name.fen.zst" "$DATA/$name.lines.zst" \
+  "$PYTHON" "$DIR/search_trace.py" "$@" select "$INPUT/$name.fen.zst" "$INPUT/$name.lines.zst" \
      "$DATA/$name.trace.zst" --positions-count "$positions" --games-count "$games"
   "$PYTHON" "$DIR/search_trace.py" "$@" generate "$DATA/$name.trace.zst" "$DATA/$name.trace.jsonl.zst"
 }
