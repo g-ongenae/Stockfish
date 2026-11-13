@@ -73,7 +73,12 @@ fn run(mb: usize, ops: u32, rng: &mut Rng) {
     for op in 1..=ops {
         let mut key = bases[rng.below(bases.len() as u32) as usize];
         let low = rng.next();
-        key |= if rng.below(4) != 0 { low & 0x3F } else { low & 0xFFFF_FFFF };
+        match rng.below(4) {
+            // 32 hot keys, rewritten often within a generation
+            1 => key = bases[(low & 7) as usize] | ((low >> 3) & 0x3),
+            0 => key |= low & 0xFFFF_FFFF,
+            _ => key |= low & 0x3F,
+        }
         if rng.below(16) == 0 {
             key = rng.next();
         }
@@ -88,21 +93,21 @@ fn run(mb: usize, ops: u32, rng: &mut Rng) {
         d.add_data(&e.data);
         d.add(e.generation as i64);
 
-        let r = rng.below(100);
-        if r < 70 {
+        let r = rng.below(1000);
+        if r < 700 {
             let v = random_value(rng);
             let pv = rng.below(2) != 0;
             let b = rng.below(4) as Bound;
-            let dp = rng.range(-2, 245);
+            let dp = if rng.below(2) != 0 { rng.range(-2, 10) } else { rng.range(-2, 245) };
             let m = if rng.below(3) != 0 { Move(rng.next() as u16) } else { Move::none() };
             let ev = if rng.below(8) != 0 { rng.range(-2000, 2000) } else { VALUE_NONE };
             tt.write(writer, key, v, pv, b, dp, m, ev, tt.generation());
-        } else if r < 75 {
+        } else if r < 750 {
             let p = rng.range(1, 3);
             tt.penalize(writer, p);
-        } else if r < 77 {
+        } else if r < 752 {
             tt.new_search();
-        } else if r < 78 {
+        } else if r < 760 {
             let max_age = rng.range(0, 31);
             d.add(tt.hashfull(max_age) as i64);
         }

@@ -99,7 +99,11 @@ void run(usize mb, int ops, Rng& rng) {
     {
         u64 key = bases[rng.below(u32(bases.size()))];
         u64 low = rng.next();
-        key |= rng.below(4) ? (low & 0x3F) : (low & 0xFFFFFFFF);
+        u32 kind = rng.below(4);
+        if (kind == 1)  // 32 hot keys, rewritten often within a generation
+            key = bases[low & 7] | ((low >> 3) & 0x3);
+        else
+            key |= kind == 0 ? (low & 0xFFFFFFFF) : (low & 0x3F);
         if (rng.below(16) == 0)
             key = rng.next();
 
@@ -113,22 +117,22 @@ void run(usize mb, int ops, Rng& rng) {
         add_data(d, e.data);
         d.add(e.generation);
 
-        u32 r = rng.below(100);
-        if (r < 70)
+        u32 r = rng.below(1000);
+        if (r < 700)
         {
             Value v  = random_value(rng);
             bool  pv = rng.below(2);
             Bound b  = Bound(rng.below(4));
-            Depth dp = rng.range(-2, 245);
+            Depth dp = rng.below(2) ? rng.range(-2, 10) : rng.range(-2, 245);
             Move  m  = rng.below(3) ? Move(u16(rng.next())) : Move::none();
             Value ev = rng.below(8) ? rng.range(-2000, 2000) : VALUE_NONE;
             writer.write(key, v, pv, b, dp, m, ev, tt.generation());
         }
-        else if (r < 75)
+        else if (r < 750)
             writer.penalize(rng.range(1, 3));
-        else if (r < 77)
+        else if (r < 752)
             tt.new_search();
-        else if (r < 78)
+        else if (r < 760)
             d.add(tt.hashfull(rng.range(0, 31)));
 
         if (op % 20000 == 0)
