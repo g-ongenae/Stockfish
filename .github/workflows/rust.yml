@@ -213,11 +213,12 @@ jobs:
       - name: Thread index, against the C++ engine patched alike
         timeout-minutes: 30
         run: |
-          rm -rf "$RUNNER_TEMP/src-idx"
-          cp -r ../src "$RUNNER_TEMP/src-idx"
-          patch -d "$RUNNER_TEMP/src-idx" -p2 < bench/thread_idx_offset.patch
-          make -C "$RUNNER_TEMP/src-idx" -j4 ARCH=x86-64-sse41-popcnt build > /dev/null
-          bench/thread_idx_check.sh "$RUNNER_TEMP/src-idx/stockfish" | tee idx-cpp.txt
+          # (the Makefile needs ../scripts next to src/)
+          rm -rf "$RUNNER_TEMP/idx" && mkdir "$RUNNER_TEMP/idx"
+          cp -r ../src ../scripts "$RUNNER_TEMP/idx/"
+          patch -d "$RUNNER_TEMP/idx/src" -p2 < bench/thread_idx_offset.patch
+          make -C "$RUNNER_TEMP/idx/src" -j4 ARCH=x86-64-sse41-popcnt build > /dev/null
+          bench/thread_idx_check.sh "$RUNNER_TEMP/idx/src/stockfish" | tee idx-cpp.txt
           cmp idx-cpp.txt thread_idx.expected
           cargo build --release --locked --features thread_idx_offset --target-dir target/idx
           bench/thread_idx_check.sh $PWD/target/idx/release/stockfish | cmp - thread_idx.expected
