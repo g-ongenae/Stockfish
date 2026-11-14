@@ -85,6 +85,22 @@ class Engine:
         self.until("bestmove")
         return (time.perf_counter() - t) * 1000
 
+    def ponder_time(self, position, go, wait_ms, then):
+        """`go ponder ...`, then `then` (ponderhit or stop) after wait_ms:
+        the time from go and from `then` to bestmove, in ms."""
+        self.send("ucinewgame")
+        self.send(f"position {position}")
+        self.send("isready")
+        self.until("readyok")
+        t = time.perf_counter()
+        self.send(go)
+        time.sleep(wait_ms / 1000)
+        t2 = time.perf_counter()
+        self.send(then)
+        self.until("bestmove")
+        end = time.perf_counter()
+        return (end - t) * 1000, (end - t2) * 1000
+
     def close(self):
         self.send("quit")
         self.p.wait()
@@ -120,6 +136,33 @@ def main():
             fmt = lambda v: f"{min(v):7.1f}-{max(v):7.1f}"
             print(f"{clock:>22} {ply:>4} {optimum:>8} {maximum:>8} {fmt(used['port']):>16} {fmt(used['C++']):>16}")
             ratios.append(statistics.mean(used["port"]) / statistics.mean(used["C++"]))
+    # Pondering on a clock, ponderhit mid-search, and go infinite then stop:
+    # what depends on when the command arrives, checked for behaviour. After
+    # ponderhit the search must end by maximum() counted from the original go
+    # (at once if that is past), or sooner; after stop, at once.
+    print("\nponderhit or stop after a wait (ms from go / from the command to bestmove)")
+    print(f"{'command':>46} {'wait':>5} {'maximum':>8} {'port':>16} {'C++':>16}")
+    position = POSITIONS[1][0]
+    cases = [("go ponder wtime 10000 btime 10000", 100, "ponderhit", bounds(10000, 0, 0, 16)[1]),
+             ("go ponder wtime 10000 btime 10000", 1500, "ponderhit", bounds(10000, 0, 0, 16)[1]),
+             ("go ponder wtime 10000 btime 10000", 3000, "ponderhit", bounds(10000, 0, 0, 16)[1]),
+             ("go ponder wtime 1000 btime 1000 winc 100 binc 100", 50, "ponderhit",
+              bounds(1000, 100, 0, 16)[1]),
+             ("go ponder wtime 60000 btime 60000", 500, "stop", 0),
+             ("go infinite", 500, "stop", 0)]
+    for go, wait, then, maximum in cases:
+        row = {}
+        for name, e in engines.items():
+            total, after = e.ponder_time(position, go, wait, then)
+            row[name] = f"{total:7.1f} /{after:6.1f}"
+            # after the command: by the maximum counted from go, else at once
+            # (stop, a search without clock); MARGIN for the check interval
+            limit = max(maximum - wait, 0) + args.margin
+            if after > limit:
+                over += 1
+                print(f"  LATE: {name}: bestmove {after:.1f} ms after {then}, allowed {limit:.1f}")
+        print(f"{go + ' ; ' + then:>46} {wait:>5} {maximum:>8} {row['port']:>16} {row['C++']:>16}")
+
     for e in engines.values():
         e.close()
     print(f"time used, port / C++: median {statistics.median(ratios):.2f}, "

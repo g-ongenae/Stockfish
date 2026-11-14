@@ -14,7 +14,7 @@ line: `position ...` and `go ...` commands separated by `;`), plain or .gz.
 Here `go` may take any argument (searchmoves, mate, a clock, ...), and a
 session may also hold `ucinewgame` and `setoption ...`, sent to both engines
 as they come. A `go ponder ... depth N` must be followed by `ponderhit` or
-`stop`: that command is sent once the engine has printed the exact `info depth N`
+`stop`, a `go infinite ... depth N` by `stop`: that command is sent once the engine has printed the exact `info depth N`
 line of its last iteration, so that the search has reached its depth limit and waits for it (the
 result does not depend on when the command arrives then). Each session starts
 with `ucinewgame`. EXE is the port, REF the reference (default: the shared
@@ -76,8 +76,8 @@ class Engine:
         lines = []
         if then is not None:
             depth = re.search(r"\bdepth (\d+)", command)
-            if not depth or " ponder" not in f" {command}":
-                sys.exit(f"'{then}' after '{command}': only after a go ponder with a depth limit")
+            if not depth or not re.search(r"\b(ponder|infinite)\b", command):
+                sys.exit(f"'{then}' after '{command}': only after a go ponder or infinite with a depth limit")
             prefix = f"info depth {depth.group(1)} "
             for line in self.p.stdout:
                 line = line.decode().strip()
@@ -164,7 +164,7 @@ def main():
                     e.send(command)
                 continue
             if command in ("ponderhit", "stop"):
-                sys.exit(f"session {n}: '{command}' must follow a go ponder")
+                sys.exit(f"session {n}: '{command}' must follow a go ponder or infinite")
             then = None
             if i < len(commands) and commands[i] in ("ponderhit", "stop"):
                 then = commands[i]

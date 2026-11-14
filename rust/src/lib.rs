@@ -13,6 +13,7 @@ pub mod bitboard;
 pub mod dump;
 pub mod engine;
 pub mod evaluate;
+pub mod fp;
 pub mod history;
 pub mod misc;
 pub mod movegen;

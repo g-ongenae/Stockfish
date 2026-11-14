@@ -3,15 +3,16 @@
 //! movestogo`), the ply of the game and the options `Move Overhead`,
 //! `nodestime` and `Ponder`, statement for statement as C++ does.
 //!
-//! The doubles are computed in the order and with the operations of C++, so
-//! that the integers they are truncated to are those of the C++ engine on
-//! x86-64; see README.md, "Time management", "Floating point", for what is
-//! established about it and on which targets.
+//! The doubles are `F64` (`fp.rs`), computed in the order and with the
+//! operations of C++ and rounded as on x86-64 on every target, so that the
+//! integers they are truncated to are those of the C++ engine on x86-64; see
+//! README.md, "Time management", "Floating point", for what is established
+//! about it and on which targets.
 
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::misc::i64_to_f64;
+use crate::fp::{self, F64};
 use crate::search::{LimitsType, SearchOptions};
 use crate::types::*;
 
@@ -25,53 +26,6 @@ pub fn now() -> TimePoint {
 }
 
 const NO_BOUND: TimePoint = i64::MAX / 2;
-
-/// `std::min` of two doubles: `(b < a) ? b : a`.
-#[inline]
-pub fn min_f64(a: f64, b: f64) -> f64 {
-    if b < a {
-        b
-    } else {
-        a
-    }
-}
-
-/// `std::max` of two doubles: `(a < b) ? b : a`.
-#[inline]
-pub fn max_f64(a: f64, b: f64) -> f64 {
-    if a < b {
-        b
-    } else {
-        a
-    }
-}
-
-/// `std::clamp` of doubles: `v < lo ? lo : hi < v ? hi : v`.
-#[inline]
-pub fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64 {
-    if v < lo {
-        lo
-    } else if hi < v {
-        hi
-    } else {
-        v
-    }
-}
-
-/// `TimePoint(x)` for a double, as the C++ engine computes it on x86-64
-/// (`cvttsd2si`): truncation toward zero, and `i64::MIN` for a value out of
-/// range (undefined behaviour in C++; reached only with clocks of millions of
-/// years). Rust's `as` would saturate instead.
-#[inline]
-pub fn to_timepoint(x: f64) -> TimePoint {
-    // [-2^63, 2^63), the doubles that convert to an i64
-    const LIMIT: f64 = 9_223_372_036_854_775_808u64 as f64;
-    if (-LIMIT..LIMIT).contains(&x) {
-        x as TimePoint
-    } else {
-        i64::MIN
-    }
-}
 
 /// The options `init()` reads (`options[...]` in C++).
 #[derive(Clone, Copy, Debug)]
@@ -221,8 +175,8 @@ impl TimeManagement {
 
         // optScale is a percentage of available time to use for the current
         // move. maxScale is a multiplier applied to optimumTime.
-        let mut opt_scale: f64;
-        let max_scale: f64;
+        let mut opt_scale: F64;
+        let max_scale: F64;
 
         // If we have to play in 'nodes as time' mode, then convert from time
         // to nodes, and use resulting values in time management formulas.
@@ -259,7 +213,7 @@ impl TimeManagement {
         // If less than one second, gradually reduce mtg. In cyclic time
         // controls we keep the actual movestogo as horizon.
         if scaled_time < 1000 && limits.movestogo == 0 {
-            mtg = (scaled_time as f64 * 0.05) as i32;
+            mtg = (F64::from_i64(scaled_time) * 0.05).to_i32();
         }
 
         // Make sure timeLeft is > 0 since we may use it as a divisor
@@ -269,10 +223,9 @@ impl TimeManagement {
                 .wrapping_sub(move_overhead.wrapping_mul((2 + mtg) as i64)),
         );
 
-        // The integers the doubles below are computed from (i64_to_f64():
-        // rounded to a double on every target)
-        let time_us = i64_to_f64(limits.time[us]);
-        let time_left_f = i64_to_f64(time_left);
+        let time_us = F64::from_i64(limits.time[us]);
+        let time_left_f = F64::from_i64(time_left);
+        let ply_f = F64::from_i32(ply);
 
         // x basetime (+ z increment)
         // If there is a healthy increment, timeLeft can exceed the actual
@@ -281,23 +234,24 @@ impl TimeManagement {
         if limits.movestogo == 0 {
             // Extra time according to timeLeft
             if *original_time_adjust < 0.0 {
-                *original_time_adjust = 0.3272 * time_left_f.log10() - 0.4141;
+                *original_time_adjust = (0.3272 * time_left_f.log10() - 0.4141).0;
             }
 
             // Calculate time constants based on current time left.
-            let log_time_in_sec = (i64_to_f64(scaled_time) / 1000.0).log10();
-            let opt_constant = min_f64(0.0029869 + 0.00033554 * log_time_in_sec, 0.004905);
-            let max_constant = max_f64(3.3744 + 3.0608 * log_time_in_sec, 3.1441);
+            let log_time_in_sec = (F64::from_i64(scaled_time) / 1000.0).log10();
+            let opt_constant = fp::min(0.0029869 + 0.00033554 * log_time_in_sec, F64(0.004905));
+            let max_constant = fp::max(3.3744 + 3.0608 * log_time_in_sec, F64(3.1441));
 
-            let by_ply = 0.012112 + (ply as f64 + 3.22713).powf(0.46866) * opt_constant;
-            opt_scale = min_f64(by_ply, 0.19404 * time_us / time_left_f) * *original_time_adjust;
+            let by_ply = 0.012112 + (ply_f + 3.22713).powf(0.46866) * opt_constant;
+            opt_scale = fp::min(by_ply, 0.19404 * time_us / time_left_f) * *original_time_adjust;
 
-            max_scale = min_f64(6.873, max_constant + ply as f64 / 12.352);
+            max_scale = fp::min(F64(6.873), max_constant + ply_f / 12.352);
         }
         // x moves in y seconds (+ z increment)
         else {
-            opt_scale = min_f64((0.88 + ply as f64 / 116.4) / mtg as f64, 0.88 * time_us / time_left_f);
-            max_scale = 1.3 + 0.11 * mtg as f64;
+            let mtg_f = F64::from_i32(mtg);
+            opt_scale = fp::min((0.88 + ply_f / 116.4) / mtg_f, 0.88 * time_us / time_left_f);
+            max_scale = 1.3 + 0.11 * mtg_f;
         }
 
         // Decrease time usage if behind in time.
@@ -312,24 +266,24 @@ impl TimeManagement {
         //   favors blunders.
         // Warning: don't remove this conditions.
         if !self.use_nodes_time && limits.movestogo != 1 {
-            let time_them = i64_to_f64(limits.time[them]);
-            let lead = i64_to_f64(limits.time[us].wrapping_sub(limits.time[them]));
+            let time_them = F64::from_i64(limits.time[them]);
+            let lead = F64::from_i64(limits.time[us].wrapping_sub(limits.time[them]));
             let time_advantage = lead / (1.0 + time_us + time_them);
-            opt_scale *= 1.0 + 0.9 * min_f64(time_advantage, 0.0);
+            opt_scale = opt_scale * (1.0 + 0.9 * fp::min(time_advantage, F64(0.0)));
         }
 
         // Limit the maximum possible time for this move
-        let optimum = max_f64(1.0, opt_scale * time_left_f);
-        self.optimum_time = to_timepoint(optimum);
-        let optimum_f = i64_to_f64(self.optimum_time);
-        let by_clock = 0.8097 * time_us - i64_to_f64(move_overhead);
-        let maximum = max_f64(optimum_f, min_f64(by_clock, max_scale * optimum_f));
-        self.maximum_time = to_timepoint(maximum);
+        let optimum = fp::max(F64(1.0), opt_scale * time_left_f);
+        self.optimum_time = optimum.to_i64();
+        let optimum_f = F64::from_i64(self.optimum_time);
+        let by_clock = 0.8097 * time_us - F64::from_i64(move_overhead);
+        let maximum = fp::max(optimum_f, fp::min(by_clock, max_scale * optimum_f));
+        self.maximum_time = maximum.to_i64();
 
         if options.ponder {
             self.optimum_time = self.optimum_time.wrapping_add(self.optimum_time / 4);
         }
 
-        (optimum, maximum)
+        (optimum.0, maximum.0)
     }
 }

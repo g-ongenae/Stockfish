@@ -18,16 +18,17 @@ it with the differential harness of `tests/differential/`.
 | Repetitions, null move, `dumpline` | `upcoming_repetition` and its cuckoo tables, `is_draw`, `has_repeated`, `do_null_move`, `dump.cpp` | `position.rs`, `dump.rs` | every member of `dumpline` |
 | 6. Move picker, histories | `movepick.{h,cpp}`, `history.h` (every table, the correction histories included) | `movepick.rs`, `history.rs` | `order_main_shallow`, `order_main_deep`, `order_qsearch`, and the drivers of `movepick_check.sh` (see below) |
 | 7. Search, transposition table (one thread) | `search.{h,cpp}`, `tt.{h,cpp}`, `searchtrace.{h,cpp}`, `score.cpp`, and of `thread`, `engine`, `uci`, `ucioption`, `timeman`, `benchmark` what a search without a clock needs | `search.rs`, `tt.rs`, `searchtrace.rs`, `score.rs`, `thread.rs`, `engine.rs`, `uci.rs`, `ucioption.rs`, `timeman.rs`, `benchmark.rs` | the search trace (`verify.sh trace`, `trace-uci`), `bench`, and the drivers of `tt_check` (see "The search" below) |
+| 8. Time management | `timeman.{h,cpp}`, the clock side of `search.cpp` (the end of each iteration, `check_time()`, `start_searching()`), `go wtime/btime/winc/binc/movestogo` of `uci.cpp` | `timeman.rs`, `search.rs`, `uci.rs` | the drivers of `tm_check` and the searches on a clock of `tests/search/clock*` (see "Time management" below) |
 
 `dump` prints all 22 members of the C++ `dump`, and `dumpline` every member
 of the C++ `dumpline`.
 
-Not ported yet: more than one thread, time management (`go wtime/btime`
-is refused with an `info string`), Syzygy tablebases, `eval`, `flip`,
+Not ported yet: more than one thread, Syzygy tablebases, `eval`, `flip`,
 `export_net` and the NUMA options (accepted, without effect). Ported but
-checked by nothing but reading and a few direct comparisons: MultiPV above
-1, skill levels, `searchmoves`, `go mate`, `go infinite`, pondering; see
-"The search", "What the gates do not see".
+checked by nothing but reading: skill levels. Checked by direct comparisons
+with the reference rather than by the corpus: MultiPV above 1, `searchmoves`,
+`go mate`, `go infinite`, pondering, searches on a clock; see "The search",
+"What the gates do not see", and "Time management".
 
 ## The network
 
@@ -432,9 +433,7 @@ bounds, `wdl`), `bestmove` and `ponder`, `bench` with its arguments, and
   at `MAX_PLY` that is at most about 1.3 MiB, a sixth of the stack. The
   deepest searches of the full corpus (selective depth 30 to 34,
   `tests/search/deep.*`) run in CI on every target, i586 musl included.
-- **No clock yet.** `timeman.rs` has the start time and `nodestime`, and
-  unbounded limits; `go wtime/btime` is refused with an `info string`, since
-  time management (and its doubles) belongs to a later layer.
+- **The clock** is layer 8: see "Time management" below.
 - **No tablebases.** Without them C++ ranks no root move and never probes
   (the cardinality is 0); the port keeps the structure (`TbConfig`) and
   `syzygy_extend_pv()` in the form it takes without tables (the draw check at
@@ -482,7 +481,8 @@ below.
 ### Floating point
 
 Four floating-point expressions of this commit reach the search or the
-output (time management's and skill levels' are out of scope):
+output besides time management's (see "Time management", "Floating
+point") and skill levels' (out of scope):
 
 - the reduction table, `int(2872 / 128.0 * std::log(i))`: a constant table in
   the port (`REDUCTIONS`), which a unit test recomputes from the formula.
@@ -544,9 +544,10 @@ both tracing binaries with that size), and is fixed.
 
 Still checked by nothing but reading against C++: `max_ply` in search and
 qsearch, the depth cap, the `forgottenMate` rollback and the depth-1 loss
-label, the `-VALUE_INFINITE` output fallback, skill levels, pondering
-(`ponderhit`), `go infinite`, `nodestime`, `syzygy_extend_pv()` without
-tables, and everything of more than one thread.
+label, the `-VALUE_INFINITE` output fallback, skill levels,
+`syzygy_extend_pv()` without tables, and everything of more than one
+thread. (Pondering, `go infinite` and `nodestime` are compared since layer
+8: see "Time management".)
 
 ### Integer widths
 
@@ -642,20 +643,14 @@ work should go, in order of evidence:
   The table and the shared histories are already `Arc` and atomic. The
   order of the C++ code that depends on `threadIdx` (`delta`, the null move
   reduction) is ported.
-- **Time management.** `timeman.rs` stops where C++ returns for a search
-  without a clock; `go wtime/btime` is refused. The rest of
-  `TimeManagement::init()`, the end-of-iteration decisions of
-  `iterative_deepening()` (an `unreachable!` marks the spot), `effort` and
-  `bestMoveChanges` (counted, never read), `stopOnPonderhit` and
-  `previousTimeReduction` are what remains; their doubles need the same
-  treatment as those of "Floating point".
+- **Time management**: see "Time management", "For the next layers".
 - **The remaining UCI options.** `NumaPolicy`, `Debug Log File`,
   `SyzygyPath` and the other Syzygy options are accepted and ignored (a
   `SyzygyPath` prints an `info string`); `eval`, `flip`, `export_net`,
   `compiler` are not ported. MultiPV, `searchmoves`, `go mate`,
   `UCI_ShowWDL` and other hash sizes are compared with the reference (see
-  above); skill levels, `UCI_LimitStrength`/`UCI_Elo`, pondering, `go
-  infinite` and `nodestime` are ported and unchecked.
+  above), and since layer 8 pondering, `go infinite` and `nodestime`; skill
+  levels and `UCI_LimitStrength`/`UCI_Elo` are ported and unchecked.
 
 ## Speed and memory
 

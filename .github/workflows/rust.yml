@@ -168,6 +168,10 @@ jobs:
           wc -l tm-cpp.txt
           cmp tm-cpp.txt tm-rust.txt
           target/cpp/tm_check digest | cmp - tm_check.expected
+          # the arithmetic in software (src/fp.rs), which the i586 targets
+          # use, against the same C++ output
+          cargo build --release --locked --features softfloat --target-dir target/softfloat --example tm_check
+          target/softfloat/release/examples/tm_check doubles | cmp - tm-cpp.txt
       # What the corpus of the trace does not reach, against the C++ engine
       # built above: mates, stalemates, the 50-move rule close to 100,
       # searchmoves, go mate, a search of 11M nodes, the bench positions to

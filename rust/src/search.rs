@@ -39,7 +39,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
 use crate::history::*;
-use crate::misc::{i64_to_f64, Prng, ValueList};
+use crate::misc::{Prng, ValueList};
 use crate::movegen::MoveList;
 use crate::movepick::{Histories, MovePicker};
 use crate::nnue::{AccumulatorCaches, AccumulatorStack, Network};
@@ -47,7 +47,8 @@ use crate::position::Position;
 use crate::score::Score;
 use crate::searchtrace::SearchTracer;
 use crate::thread::SharedFlags;
-use crate::timeman::{clamp_f64, min_f64, TimeManagement, TimePoint, TmOptions};
+use crate::fp::{self, F64};
+use crate::timeman::{TimeManagement, TimePoint, TmOptions};
 use crate::tt::*;
 use crate::types::*;
 use crate::uci;
@@ -265,17 +266,17 @@ fn stable_sort(moves: &mut [RootMove]) {
 /// `interpolate()` of `misc.h` with doubles: `y0 + (y1 - y0) * (x - x0) /
 /// (x1 - x0)`.
 #[inline]
-fn interpolate_f64(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
+fn interpolate_f64(x: F64, x0: f64, x1: f64, y0: f64, y1: f64) -> F64 {
     debug_assert!(x0 != x1);
-    y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    y0 + (F64(y1) - y0) * (x - x0) / (F64(x1) - x0)
 }
 
 /// `interpolate()` of `misc.h` with `i64` abscissae and double ordinates:
 /// the differences of the abscissae are taken in integers, then converted.
 #[inline]
-fn interpolate_i64(x: i64, x0: i64, x1: i64, y0: f64, y1: f64) -> f64 {
+fn interpolate_i64(x: i64, x0: i64, x1: i64, y0: f64, y1: f64) -> F64 {
     debug_assert!(x0 != x1);
-    y0 + (y1 - y0) * i64_to_f64(x.wrapping_sub(x0)) / i64_to_f64(x1.wrapping_sub(x0))
+    y0 + (F64(y1) - y0) * F64::from_i64(x.wrapping_sub(x0)) / F64::from_i64(x1.wrapping_sub(x0))
 }
 
 pub type RootMoves = Vec<RootMove>;
@@ -824,8 +825,8 @@ impl Worker {
         let mut beta: Value;
         let mut best_value: Value = -VALUE_INFINITE;
         let us = self.root_pos.side_to_move();
-        let mut time_reduction: f64 = 1.0;
-        let mut tot_best_move_changes: f64 = 0.0;
+        let mut time_reduction = F64(1.0);
+        let mut tot_best_move_changes = F64(0.0);
         let mut delta: i32;
         let mut iter_idx: usize = 0;
 
@@ -1142,50 +1143,46 @@ impl Worker {
                 let nodes_effort: u64 = self.root_moves[0].effort.wrapping_mul(100000) / 1u64.max(self.nodes);
 
                 let mm = self.manager.as_deref_mut().unwrap();
-                let mut falling_eval = (11.48
-                    + 2.30 * (mm.best_previous_average_score - best_value) as f64
-                    + 1.1 * (mm.iter_value[iter_idx] - best_value) as f64)
-                    / 100.0;
-                falling_eval = clamp_f64(falling_eval, 0.576, 1.728);
+                let by_average = F64::from_i32(mm.best_previous_average_score - best_value);
+                let by_iteration = F64::from_i32(mm.iter_value[iter_idx] - best_value);
+                let mut falling_eval = (11.48 + 2.30 * by_average + 1.1 * by_iteration) / 100.0;
+                falling_eval = fp::clamp(falling_eval, 0.576, 1.728);
 
                 // If the bestMove is stable over several iterations, reduce
                 // time accordingly
-                time_reduction = clamp_f64(
-                    interpolate_f64((self.root_depth - last_best_move_depth) as f64, 4.96, 18.79, 0.639, 1.712),
-                    0.629,
-                    1.544,
-                );
+                let age = F64::from_i32(self.root_depth - last_best_move_depth);
+                time_reduction = fp::clamp(interpolate_f64(age, 4.96, 18.79, 0.639, 1.712), 0.629, 1.544);
 
-                let reduction = (1.468 + mm.previous_time_reduction) / (2.284 * time_reduction);
+                let reduction = (1.468 + F64(mm.previous_time_reduction)) / (2.284 * time_reduction);
 
                 // Age out and update PV variability metric (of every thread:
                 // this one only for now)
-                tot_best_move_changes /= 2.0;
-                tot_best_move_changes += self.best_move_changes as f64;
+                tot_best_move_changes = tot_best_move_changes / 2.0;
+                tot_best_move_changes = tot_best_move_changes + F64::from_i64(self.best_move_changes as i64);
                 self.best_move_changes = 0;
 
                 let threads_size = 1.0;
                 let best_move_instability = 1.077 + 2.229 * tot_best_move_changes / threads_size;
 
-                let high_best_move_effort =
-                    clamp_f64(interpolate_i64(nodes_effort as i64, 75800, 104510, 0.969, 0.714), 0.693, 0.838);
+                let effort = interpolate_i64(nodes_effort as i64, 75800, 104510, 0.969, 0.714);
+                let high_best_move_effort = fp::clamp(effort, 0.693, 0.838);
 
-                let optimum = i64_to_f64(mm.tm.optimum());
+                let optimum = F64::from_i64(mm.tm.optimum());
                 // C++'s left-to-right order of the products
                 let partial = optimum * falling_eval * reduction;
                 let mut total_time = partial * best_move_instability * high_best_move_effort;
 
                 if self.root_moves.len() == 1 {
                     // Cap used time to 0.5s for a better viewer experience
-                    total_time = min_f64(500.0 * i64_to_f64(self.limits.npmsec.max(1)), total_time);
+                    total_time = fp::min(500.0 * F64::from_i64(self.limits.npmsec.max(1)), total_time);
                 }
 
-                let elapsed_time = i64_to_f64(mm.tm.elapsed(self.nodes));
+                let elapsed_time = F64::from_i64(mm.tm.elapsed(self.nodes));
 
                 // Stop the search if we have exceeded totalTime or maximum
                 // time, or if we know that there are no better moves in the
                 // analysed line(s).
-                if elapsed_time > min_f64(total_time, i64_to_f64(mm.tm.maximum()))
+                if elapsed_time > fp::min(total_time, F64::from_i64(mm.tm.maximum()))
                     || self.root_moves[multi_pv - 1].score >= mate_in(3)
                     || self.root_moves[0].score == mated_in(2)
                 {
@@ -1214,7 +1211,7 @@ impl Worker {
             return false;
         }
 
-        self.main_manager().previous_time_reduction = time_reduction;
+        self.main_manager().previous_time_reduction = time_reduction.0;
 
         // If the skill level is enabled, swap the best PV line with the
         // sub-optimal one

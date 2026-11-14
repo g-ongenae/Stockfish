@@ -20,6 +20,9 @@ path = "src/main.rs"
 [features]
 # Use the 32-bit magic index computation on a 64-bit target, to test it.
 magic32 = []
+# Do the doubles of time management in software on every target (src/fp.rs),
+# as the i586 targets do, to test that path.
+softfloat = []
 
 [profile.release]
 opt-level = 3
