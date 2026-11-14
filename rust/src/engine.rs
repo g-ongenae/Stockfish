@@ -31,6 +31,9 @@ pub struct Engine {
     /// The network and the `EvalFile` value it was read for. Read on first
     /// use rather than embedded (see README.md, "The network").
     network: Option<(Vec<u8>, Arc<Network>)>,
+    /// Whether the loaded network has been announced (`info string NNUE
+    /// evaluation using ...`) or its failure reported, by verify_network().
+    network_verified: bool,
     update_context: Arc<UpdateContext>,
 }
 
@@ -95,6 +98,7 @@ impl Engine {
             tt,
             shared_histories,
             network: None,
+            network_verified: false,
             update_context,
         };
         e.threads.clear();
@@ -219,32 +223,65 @@ impl Engine {
         self.threads.main_worker().manager.as_deref_mut().unwrap().updates = ctx;
     }
 
+    /// The file of the `EvalFile` option, the default name if empty.
+    fn eval_file(&self) -> Vec<u8> {
+        let path = self.options.string("EvalFile").as_bytes().to_vec();
+        if path.is_empty() {
+            EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec()
+        } else {
+            path
+        }
+    }
+
+    /// Loads the network of the `EvalFile` option if it is not the one
+    /// loaded, printing nothing: the file is looked for as given (relative
+    /// to the working directory), then in the directory of the binary. When
+    /// a network is (re)loaded, the workers are cleared, as `load_network()`
+    /// does in C++.
+    fn load_network(&mut self) {
+        let path = self.eval_file();
+        if self.network.as_ref().map(|(p, _)| p) == Some(&path) {
+            return;
+        }
+        self.network = None;
+        self.network_verified = false;
+        let mut dirs = vec![std::path::PathBuf::new()];
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+            dirs.push(dir);
+        }
+        for dir in dirs {
+            let Ok(file) = File::open(dir.join(uci::path_from_bytes(&path))) else { continue };
+            if let Some(net) = Network::load(BufReader::with_capacity(1 << 16, file)) {
+                self.network = Some((path.clone(), Arc::new(net)));
+                break;
+            }
+        }
+        if let Some((_, net)) = &self.network {
+            let net = net.clone();
+            self.threads.main_worker().set_network(net);
+            self.threads.clear();
+        }
+    }
+
+    /// At `isready`, loads the network if none is loaded yet, so that the
+    /// first `go` does not spend its clock on it: C++ embeds the network and
+    /// has it from the start, and the UCI protocol sends `isready` before a
+    /// search for such initialisation. Prints nothing; a failure is reported
+    /// by the next verify_network(), as before. Never while a network is
+    /// loaded, so never while a search runs.
+    pub fn preload_network(&mut self) {
+        if self.network.is_none() {
+            self.load_network();
+        }
+    }
+
     /// Loads the network of the `EvalFile` option if it is not loaded yet, or
     /// terminates as C++ does when it cannot (`Engine::verify_network`). The
-    /// file is looked for as given (relative to the working directory), then
-    /// in the directory of the binary. When a network is (re)loaded, the
-    /// workers are cleared, as `load_network()` does in C++.
+    /// first call after a load announces the network.
     pub fn verify_network(&mut self) -> Arc<Network> {
-        let mut path = self.options.string("EvalFile").as_bytes().to_vec();
-        if path.is_empty() {
-            path = EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec();
-        }
-
-        if self.network.as_ref().map(|(p, _)| p) != Some(&path) {
-            self.network = None;
-            let mut dirs = vec![std::path::PathBuf::new()];
-            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
-                dirs.push(dir);
-            }
-            for dir in dirs {
-                let Ok(file) = File::open(dir.join(uci::path_from_bytes(&path))) else { continue };
-                if let Some(net) = Network::load(BufReader::with_capacity(1 << 16, file)) {
-                    self.network = Some((path.clone(), Arc::new(net)));
-                    break;
-                }
-            }
-
-            let name = String::from_utf8_lossy(&path).into_owned();
+        self.load_network();
+        if !self.network_verified {
+            let name = String::from_utf8_lossy(&self.eval_file()).into_owned();
             let mut out = io::stdout().lock();
             match &self.network {
                 Some((_, net)) => {
@@ -273,11 +310,7 @@ impl Engine {
                     std::process::exit(1);
                 }
             }
-            drop(out);
-
-            let net = self.network.as_ref().unwrap().1.clone();
-            self.threads.main_worker().set_network(net);
-            self.threads.clear();
+            self.network_verified = true;
         }
         self.network.as_ref().unwrap().1.clone()
     }

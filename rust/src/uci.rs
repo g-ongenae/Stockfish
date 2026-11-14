@@ -198,6 +198,8 @@ impl UciEngine {
                 let _ = writeln!(out, "uciok");
             }
             b"isready" => {
+                // the network, if none is loaded yet (see preload_network())
+                self.engine.preload_network();
                 let _ = writeln!(io::stdout().lock(), "readyok");
             }
             b"ucinewgame" => self.engine.search_clear(),
