@@ -11,6 +11,13 @@
 #                                             direct comparisons over UCI with a
 #                                             reference (bench/compare_uci.py):
 #                                             what the trace does not reach
+#   ./search_check.sh clock <engine>          searches on a clock under nodestime
+#                                             (part of tests/search/clock*.sessions)
+#                                             against the reference's output kept
+#                                             in tests/search/clock*.expected.jsonl
+#   REF=<engine> ./search_check.sh clock-record <dir>
+#                                             writes those expected files into dir
+#                                             (CI compares them with the kept ones)
 #   ./search_check.sh tt <driver>             runs a transposition table driver
 #                                             (bench/tt_check.cpp or
 #                                             examples/tt_check.rs): what
@@ -69,6 +76,32 @@ compare)
     $c $SAMPLE/standard.trace.gz --option UCI_ShowWDL=true --every 4
     $c $SAMPLE/standard.trace.gz --option MultiPV=3 --every 6
     $c $SAMPLE/chess960.trace.gz --option MultiPV=4 --option UCI_ShowWDL=true --every 6 --chess960
+    # searches on a clock, under nodestime (README.md, "Time management")
+    $c tests/search/clock.sessions
+    $c tests/search/clockgames.sessions
+    $c tests/search/clockgames960.sessions --chess960
+    ;;
+clock | clock-record)
+    # the part of the clock sessions the emulated targets run (a few minutes
+    # under qemu): name, then the arguments of compare_uci.py
+    mode=$1
+    target=${2:?engine or directory}
+    if [ "$mode" = clock ]; then
+        EXE=$(cd "$(dirname "$target")" && pwd)/$(basename "$target")
+        export EXE RUN_PREFIX
+    fi
+    part() {
+        name=$1
+        shift
+        if [ "$mode" = clock ]; then
+            $PYTHON bench/compare_uci.py "$@" --expected "tests/search/$name.expected.jsonl"
+        else
+            $PYTHON bench/compare_uci.py "$@" --record "$target/$name.expected.jsonl"
+        fi
+    }
+    part clock tests/search/clock.sessions --every 5
+    part clockgames tests/search/clockgames.sessions --every 37
+    part clockgames960 tests/search/clockgames960.sessions --every 19 --chess960
     ;;
 tt)
     drv=${2:?driver}
@@ -76,7 +109,7 @@ tt)
     $RUN_PREFIX "$drv" 100000 1 2 3 5 7 16 33
     ;;
 *)
-    echo "usage: $0 bench|deep|compare <engine> | tt <driver>" >&2
+    echo "usage: $0 bench|deep|compare|clock <engine> | clock-record <dir> | tt <driver>" >&2
     exit 2
     ;;
 esac
