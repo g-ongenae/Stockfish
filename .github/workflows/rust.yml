@@ -154,13 +154,34 @@ jobs:
           wc -l tt-cpp.txt
           cmp tt-cpp.txt tt-rust.txt
           cmp tt-cpp.txt tt_check.expected
+      # The time manager against the C++ one: 346,771 calls of init() over
+      # clocks, increments, movestogo, plies, Move Overhead, nodestime and
+      # Ponder, with advance_nodes_time() between the calls of a game; the
+      # same lines, the same bits of originalTimeAdjust (README.md, "Time
+      # management")
+      - name: Time manager, C++ against Rust
+        run: |
+          ARCH=x86-64-sse41-popcnt bench/build_tm_check.sh
+          cargo build --release --locked --example tm_check
+          target/cpp/tm_check doubles > tm-cpp.txt
+          target/release/examples/tm_check doubles > tm-rust.txt
+          wc -l tm-cpp.txt
+          cmp tm-cpp.txt tm-rust.txt
+          target/cpp/tm_check digest | cmp - tm_check.expected
       # What the corpus of the trace does not reach, against the C++ engine
       # built above: mates, stalemates, the 50-move rule close to 100,
       # searchmoves, go mate, a search of 11M nodes, the bench positions to
-      # depth 18 and 20; and the hash sizes, UCI_ShowWDL and MultiPV on part
-      # of the sample (README.md, "What the gates do not see")
+      # depth 18 and 20; the hash sizes, UCI_ShowWDL and MultiPV on part of
+      # the sample (README.md, "What the gates do not see"); and searches on
+      # a clock under nodestime (README.md, "Time management")
       - name: Search, direct comparisons with the C++ engine
         run: REF=$PWD/../src/stockfish ./search_check.sh compare target/release/stockfish
+      - name: Clock sessions, the recorded expected output is the C++ output
+        run: |
+          mkdir -p clock-expected
+          REF=$PWD/../src/stockfish ./search_check.sh clock-record clock-expected
+          for f in clock-expected/*.jsonl; do cmp "$f" "tests/search/$(basename "$f")"; done
+          ./search_check.sh clock target/release/stockfish
       - name: Move picker, movepick_check.expected is the C++ output
         run: EXE=target/cpp/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
       - name: Move picker with magic32
@@ -345,6 +366,25 @@ jobs:
         run: |
           cargo build --release --locked --example tt_check
           RUN_PREFIX="$RUNNER" ./search_check.sh tt $PWD/target/$TARGET/release/examples/tt_check | cmp - tt_check.expected
+      # The time manager against the C++ digest kept in tm_check.expected
+      # (checked against the C++ code by the x86-64 job). Then, for
+      # information, how far its doubles are from the port's on x86-64
+      # (README.md, "Time management", "Floating point")
+      - name: Time manager against the C++ driver (emulated)
+        run: |
+          cargo build --release --locked --example tm_check
+          $RUNNER target/$TARGET/release/examples/tm_check digest | cmp - tm_check.expected
+      - name: Time manager, doubles against x86-64 (emulated, information)
+        if: always()
+        run: |
+          cargo build --release --locked --example tm_check --target x86_64-unknown-linux-gnu
+          target/x86_64-unknown-linux-gnu/release/examples/tm_check raw > tm-native.txt
+          $RUNNER target/$TARGET/release/examples/tm_check raw > tm-target.txt
+          python3 bench/tm_doubles.py tm-native.txt tm-target.txt
+      # Searches on a clock under nodestime, part of tests/search/clock*,
+      # against the C++ output kept in tests/search/*.expected.jsonl
+      - name: Searches on a clock (emulated)
+        run: RUN_PREFIX="$RUNNER" ./search_check.sh clock $EXE
       - name: Bench signature (emulated)
         run: RUN_PREFIX="$RUNNER" ./search_check.sh bench $EXE
       - name: Perft (emulated), depth ${{ matrix.perft_depth }} at most
