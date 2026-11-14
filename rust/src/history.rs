@@ -474,6 +474,11 @@ impl SharedHistories {
         }
     }
 
+    /// `sizeMinus1` and `pawnHistSizeMinus1`, the index masks.
+    pub fn masks(&self) -> (usize, usize) {
+        (self.size_minus1, self.pawn_hist_size_minus1)
+    }
+
     /// `get_size()`: the number of entries of the correction history.
     pub fn get_size(&self) -> usize {
         self.size_minus1 + 1

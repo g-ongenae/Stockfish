@@ -101,12 +101,14 @@ impl Engine {
     }
 
     /// `setoption`: sets an option and does what C++ does on its change.
-    pub fn setoption(&mut self, name: &str, value: &str) {
+    /// Returns what C++'s `on_change` returns, which the UCI loop prints as
+    /// an `info string` (C++'s info listener).
+    pub fn setoption(&mut self, name: &str, value: &str) -> Option<String> {
         self.wait_for_search_finished();
         match self.options.setoption(name, value) {
             Some("Threads") => {
                 self.resize_threads();
-                println!("info string {}", self.thread_allocation_information_as_string());
+                return Some(self.thread_allocation_information_as_string());
             }
             Some("Hash") => self.set_tt_size(self.options.int("Hash") as usize),
             Some("Clear Hash") => self.search_clear(),
@@ -121,11 +123,12 @@ impl Engine {
             }
             Some("SyzygyPath") => {
                 if !self.options.string("SyzygyPath").is_empty() {
-                    println!("info string Tablebases are not supported by this port");
+                    return Some("Tablebases are not supported by this port".into());
                 }
             }
             _ => {}
         }
+        None
     }
 
     /// `resize_threads()`: recreates the threads, their shared histories

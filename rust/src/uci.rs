@@ -262,7 +262,9 @@ impl UciEngine {
         }
         let name = String::from_utf8_lossy(&name).into_owned();
         let value = String::from_utf8_lossy(&value).into_owned();
-        self.engine.setoption(&name, &value);
+        if let Some(info) = self.engine.setoption(&name, &value) {
+            println!("info string {info}");
+        }
     }
 
     fn position<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {

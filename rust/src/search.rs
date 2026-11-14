@@ -538,8 +538,8 @@ pub struct Worker {
     last_iteration_idx_pv: PVMoves,
 
     pub thread_idx: usize,
-    numa_thread_idx: usize,
-    numa_total: usize,
+    pub numa_thread_idx: usize,
+    pub numa_total: usize,
 
     /// The main thread has a SearchManager, the others have none
     pub manager: Option<Box<SearchManager>>,

@@ -203,6 +203,22 @@ impl TranspositionTable {
         }
     }
 
+    /// The bytes of the table that are not zero, as the bytes of the C++
+    /// clusters (for the drivers: a cleared table has none).
+    pub fn nonzero_bytes(&self) -> usize {
+        let nz = |v: u64, bytes: u32| (0..bytes).filter(|i| (v >> (8 * i)) & 0xFF != 0).count();
+        let mut n = 0;
+        for c in self.table.iter() {
+            n += nz(c.keys_lo.load(Relaxed) as u64, 4) + nz(c.keys_hi.load(Relaxed) as u64, 4);
+            for e in &c.entry {
+                n += nz(e.depth8.load(Relaxed) as u64, 1) + nz(e.gen_bound8.load(Relaxed) as u64, 1);
+                n += nz(e.move16.load(Relaxed) as u64, 2) + nz(e.value16.load(Relaxed) as u16 as u64, 2);
+                n += nz(e.eval16.load(Relaxed) as u16 as u64, 2);
+            }
+        }
+        n
+    }
+
     pub fn cluster_count(&self) -> usize {
         self.table.len()
     }
