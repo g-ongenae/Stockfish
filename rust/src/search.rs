@@ -993,8 +993,8 @@ impl Worker {
                 self.sel_depth = 0;
 
                 // Reset aspiration window starting size
-                delta = (5 + self.search_idx() % 8 + (self.root_moves[pv_idx].mean_squared_score.abs() / 10193) as usize)
-                    as i32;
+                let mss = self.root_moves[pv_idx].mean_squared_score;
+                delta = (5 + self.search_idx() % 8 + (mss.abs() / 10193) as usize) as i32;
                 let avg = self.root_moves[pv_idx].average_score;
                 alpha = (avg - delta).max(-VALUE_INFINITE);
                 beta = (avg + delta).min(VALUE_INFINITE);

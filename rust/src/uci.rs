@@ -220,6 +220,12 @@ impl UciEngine {
                 self.dump_line(&tokens.rest[start..]);
             }
             b"searchtrace" => self.search_trace(tokens),
+            // Add custom non-UCI commands, mainly for debugging purposes.
+            b"flip" => {
+                if let Err(e) = self.engine.pos.flip() {
+                    self.terminate_on_critical_error(e.what());
+                }
+            }
             b"d" => {
                 let _ = writeln!(
                     io::stdout().lock(),

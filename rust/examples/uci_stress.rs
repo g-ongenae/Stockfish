@@ -191,7 +191,9 @@ impl Engine {
                 }
                 Ok(l)
             }
-            Ok(None) | Err(RecvTimeoutError::Disconnected) => Err(format!("the engine exited, waiting for {waiting_for}")),
+            Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                Err(format!("the engine exited, waiting for {waiting_for}"))
+            }
             Err(RecvTimeoutError::Timeout) => Err(format!("no {waiting_for} before the deadline (hang)")),
         }
     }
@@ -619,7 +621,8 @@ fn main() {
             _ => panic!("unknown option {a}"),
         }
     }
-    let mut cmd: Vec<String> = std::env::var("RUN_PREFIX").unwrap_or_default().split_whitespace().map(String::from).collect();
+    let prefix = std::env::var("RUN_PREFIX").unwrap_or_default();
+    let mut cmd: Vec<String> = prefix.split_whitespace().map(String::from).collect();
     cmd.extend(args);
     assert!(!cmd.is_empty(), "usage: uci_stress [options] ENGINE...");
 
@@ -648,7 +651,8 @@ fn main() {
 
     let st = &s.stats;
     println!(
-        "{} searches in {:.0} s (seed {seed}): {:?}; by thread count {:?}; {} stopped or ponderhit, {} quit in a search, {} mates checked",
+        "{} searches in {:.0} s (seed {seed}): {:?}; by thread count {:?}; {} stopped or ponderhit, \
+         {} quit in a search, {} mates checked",
         st.searches,
         start.elapsed().as_secs_f64(),
         st.by_kind,

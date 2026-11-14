@@ -115,9 +115,8 @@ fn sizes() {
 fn worker_line(w: &Worker, shared: &SharedHistories) -> String {
     let main = digest(w.main_history.iter().flat_map(|r| r.iter().map(|e| e.get())));
     let capture = digest(w.capture_history.iter().flat_map(|a| a.iter().flat_map(|b| b.iter().map(|e| e.get()))));
-    let cch = digest(
-        w.continuation_correction_history.tables().iter().flat_map(|t| t.iter().flat_map(|r| r.iter().map(|e| e.get()))),
-    );
+    let cch_tables = w.continuation_correction_history.tables();
+    let cch = digest(cch_tables.iter().flat_map(|t| t.iter().flat_map(|r| r.iter().map(|e| e.get()))));
     format!(
         "  worker {} numa {}/{} main {} shared {} main_history {} capture_history {} \
          continuation_correction_history {} ttmove_history {}",

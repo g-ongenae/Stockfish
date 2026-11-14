@@ -88,6 +88,7 @@ def main():
     ap.add_argument("--pool", default="4,3", help="the thread counts searched with before")
     ap.add_argument("--timeout", type=float, default=300)
     ap.add_argument("--record", action="store_true", help="print the records, compare nothing")
+    ap.add_argument("--light", action="store_true", help="shorter searches with the pool (emulation)")
     ap.add_argument("engine", nargs="+")
     args = ap.parse_args()
 
@@ -103,10 +104,10 @@ def main():
         e.send("setoption name Hash value 8")
         e.send("setoption name MultiPV value 2")
         e.send("position startpos moves e2e4 c7c5 g1f3")
-        e.send("go depth 11")
+        e.send(f"go depth {7 if args.light else 11}")
         e.until("bestmove")
         e.send("position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 10")
-        e.send("go nodes 200000")
+        e.send(f"go nodes {20000 if args.light else 200000}")
         e.until("bestmove")
 
     checked = 0
