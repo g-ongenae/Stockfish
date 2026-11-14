@@ -388,7 +388,9 @@ impl Session {
             if m > 0 && self.rng.chance(50) {
                 ("mate", format!("go mate {m}"))
             } else {
-                ("depth", format!("go depth {}", 6 + self.rng.below(if self.light { 2 } else { 8 })))
+                // (with several threads, C++ too misses the mate in 2 at
+                // depth 6 at times: from depth 12 it is required)
+                ("depth", format!("go depth {}", 12 + self.rng.below(if self.light { 2 } else { 7 })))
             }
         } else if k < 25 {
             let max = if self.rng.chance(30) {
@@ -556,14 +558,16 @@ impl Session {
 
         // go nodes N: within N plus what the threads search before the
         // main thread sees the limit and they see its stop. The main thread
-        // checks every min(512, N / 1024) of its nodes, but its countdown
-        // carries over from the previous search (up to 512 nodes), and the
-        // helpers search from their start to the stop: measured on the C++
-        // engine, up to some 11,000 nodes with 4 threads on 2 cores. The
-        // bound is loose; the run prints the largest excess.
+        // checks the limit every min(512, N / 1024) calls of search() (not
+        // of qsearch(), so in a tactical position many more nodes), its
+        // countdown carries over from the previous search, and the helpers
+        // search until the stop: the C++ engine searches up to 21,400 nodes
+        // for "go nodes 7706" with 1 thread in one of these positions and
+        // 42,788 with 3. The bound only catches a limit ignored; the run
+        // prints the largest excess.
         if s.kind == "nodes" && !s.stopped {
             let n: u64 = s.go.split_whitespace().nth(2).unwrap().parse().unwrap();
-            let allowance = 1024 + 8192 * self.threads as u64;
+            let allowance = 32768 + 32768 * self.threads as u64;
             if last_nodes > n + allowance {
                 return Err(format!("go nodes {n} searched {last_nodes} with {} threads", self.threads));
             }
@@ -581,7 +585,7 @@ impl Session {
 
         // known mates, when the search was not cut
         if let Some((m, mv)) = s.tp.mate {
-            let complete = !s.stopped && (s.kind == "mate" || (s.kind == "depth" && last_depth >= 6));
+            let complete = !s.stopped && (s.kind == "mate" || (s.kind == "depth" && last_depth >= 12));
             if complete && s.extra_moves == 0 && (s.tp.searchmoves.is_none() || !s.searchmoves.is_empty()) {
                 if last_score != Some(("mate".to_string(), m as i64)) {
                     return Err(format!("expected mate {m}, got {last_score:?}"));

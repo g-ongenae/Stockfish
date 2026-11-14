@@ -1099,15 +1099,28 @@ run instead, and what each one establishes:
    counts that never decrease, `go depth D` reaching D, mates found with
    their sign, distance and move, nothing printed after `bestmove` (the
    answer to an `isready` sent at once is the next line), and `go nodes N`
-   within N + 1,024 + 8,192 per thread. Run first on the C++ engine, which
+   within N + 32,768 + 32,768 per thread (only a limit ignored outright:
+   the overshoot of C++ itself is large, see below). Run first on the C++ engine, which
    must pass it (it does: 1,873 searches in 5 minutes, seed 1), then on the
    port: 1,725 searches (seed 1, the same commands), 399 with the debug build
    (seed 2, overflow and bounds checks, the ported asserts), 397 with
    `counter32` (seed 3), all passing. The overshoot of `go nodes` is C++'s
    too: largest excess with 1, 2, 3, 4, 8 threads, C++ 6,342, 1,533, 10,775,
-   13,712, 23,042 nodes, the port 3,166, 1,701, 6,488, 6,646, 24,674 (with
-   one thread `callsCnt` carries over from the previous search; with
-   several, the helpers search until the stop reaches them). CI runs it
+   13,712, 23,042 nodes, the port 3,166, 1,701, 6,488, 6,646, 24,674.
+   `check_time()` runs in `search()`, not in `qsearch()`, so its countdown
+   of `min(512, N / 1024)` counts calls of `search()`, which in a tactical
+   position are a small part of the nodes; the countdown also carries over
+   from the previous search, and the helpers search until the stop reaches
+   them. The first CI run under qemu found `go nodes 7706` searching 37,387
+   nodes with 3 threads on PowerPC; on this machine, natively, from a fresh
+   session, the same command in that position (the bench position with many
+   threats, MultiPV 3) gives 27,970 to 31,881 nodes with 2 threads in C++
+   and 28,268 to 32,179 in the port, 28,890 to 35,622 and 18,877 to 33,027
+   with 3 (15 runs each), and C++ reached 42,788 after the clock search
+   that preceded it in the CI session: C++'s behaviour, not emulation's. The
+   same CI run found the stress test's own mistake: with 4 threads a mate
+   in 2 was not reported at depth 6, which C++ also misses (1 time in 30
+   here, the port 2 in 30); mates are now required from depth 12. CI runs it
    for 4 minutes (release), 4 (debug) and 2 (`counter32`) on x86-64, and 5
    minutes `--light` (short searches, 1 to 5 threads) under each emulator,
    where the node counters are the 32-bit form (32-bit PowerPC included).
