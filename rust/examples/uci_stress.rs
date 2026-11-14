@@ -5,7 +5,7 @@
 //! is set; it uses the port's library only to judge moves.
 //!
 //!     uci_stress [--seconds S] [--searches N] [--seed X] [--threads LIST]
-//!                [--hash LIST] [--slow F] ENGINE...
+//!                [--hash LIST] [--slow F] [--light] ENGINE...
 //!
 //! Sessions draw from: `setoption` of `Threads` (LIST, default 1,2,3,4,8 and
 //! more threads than cores), `Hash` (LIST, default 1,2,16), `MultiPV`,
@@ -25,7 +25,9 @@
 //! known mates reported with their sign and distance and the mating move;
 //! nothing printed after `bestmove` (an `isready` sent at once must be
 //! answered by the next line); a `quit` in a search must end the process
-//! with status 0. The deadlines are multiplied by `--slow` (emulation).
+//! with status 0. The deadlines are multiplied by `--slow`, and `--light`
+//! keeps the searches short (at most 20,000 nodes, depth 7, 200 ms, clocks
+//! of 2 s): for emulation.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -262,6 +264,7 @@ struct Session {
     chess960: bool,
     threads_list: Vec<usize>,
     hash_list: Vec<usize>,
+    light: bool,
     stats: Stats,
 }
 
@@ -381,17 +384,17 @@ impl Session {
             if m > 0 && self.rng.chance(50) {
                 ("mate", format!("go mate {m}"))
             } else {
-                ("depth", format!("go depth {}", 6 + self.rng.below(8)))
+                ("depth", format!("go depth {}", 6 + self.rng.below(if self.light { 2 } else { 8 })))
             }
         } else if k < 25 {
-            let max = if self.rng.chance(30) { 1000 } else { 300_000 };
+            let max = if self.rng.chance(30) { 1000 } else if self.light { 20_000 } else { 300_000 };
             ("nodes", format!("go nodes {}", 1 + self.rng.below(max)))
         } else if k < 45 {
-            ("depth", format!("go depth {}", 1 + self.rng.below(13)))
+            ("depth", format!("go depth {}", 1 + self.rng.below(if self.light { 7 } else { 13 })))
         } else if k < 57 {
-            ("movetime", format!("go movetime {}", 1 + self.rng.below(300)))
+            ("movetime", format!("go movetime {}", 1 + self.rng.below(if self.light { 200 } else { 300 })))
         } else if k < 72 {
-            let t = 50 + self.rng.below(5000);
+            let t = 50 + self.rng.below(if self.light { 2000 } else { 5000 });
             let inc = if self.rng.chance(50) { self.rng.below(100) } else { 0 };
             let mut g = format!("go wtime {t} btime {t} winc {inc} binc {inc}");
             if self.rng.chance(30) {
@@ -401,7 +404,7 @@ impl Session {
         } else if k < 84 {
             ("infinite", "go infinite".to_string())
         } else {
-            let t = 100 + self.rng.below(3000);
+            let t = 100 + self.rng.below(if self.light { 1000 } else { 3000 });
             ("ponder", format!("go ponder wtime {t} btime {t} winc 20 binc 20"))
         };
         if let Some(sm) = tp.searchmoves {
@@ -594,12 +597,17 @@ fn main() {
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
     let mut threads_list = vec![1, 2, 3, 4, 8, cores + 1];
     let mut hash_list = vec![1, 2, 16];
+    let mut light = false;
     let list = |s: String| s.split(',').map(|x| x.parse().expect("a number")).collect::<Vec<usize>>();
     while let Some(a) = args.peek() {
         if !a.starts_with("--") {
             break;
         }
         let a = args.next().unwrap();
+        if a == "--light" {
+            light = true;
+            continue;
+        }
         let v = args.next().expect("a value");
         match a.as_str() {
             "--seconds" => seconds = v.parse().expect("seconds"),
@@ -626,6 +634,7 @@ fn main() {
         chess960: false,
         threads_list,
         hash_list,
+        light,
         stats: Stats::default(),
     };
     let start = Instant::now();

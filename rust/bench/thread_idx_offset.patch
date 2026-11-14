@@ -1,0 +1,39 @@
+diff --git a/src/search.cpp b/src/search.cpp
+index 338ba3cf..e415dc8e 100644
+--- a/src/search.cpp
++++ b/src/search.cpp
+@@ -174,6 +174,16 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
+         && (ss - 2)->currentMove.from_sq() == (ss - 4)->currentMove.to_sq();
+ }
+ 
++// Test only (rust/bench/thread_idx_offset.patch): SF_THREAD_IDX_OFFSET is
++// added to the index of each thread where the search depends on it.
++usize thread_idx_offset() {
++    static const usize offset = [] {
++        const char* v = std::getenv("SF_THREAD_IDX_OFFSET");
++        return v ? usize(std::atoi(v)) : usize(0);
++    }();
++    return offset;
++}
++
+ }  // namespace
+ 
+ Search::Worker::Worker(SharedState&                   sharedState,
+@@ -392,7 +402,7 @@ bool Search::Worker::iterative_deepening() {
+             selDepth = 0;
+ 
+             // Reset aspiration window starting size
+-            delta     = 5 + threadIdx % 8 + std::abs(rootMoves[pvIdx].meanSquaredScore) / 10193;
++            delta     = 5 + (threadIdx + thread_idx_offset()) % 8 + std::abs(rootMoves[pvIdx].meanSquaredScore) / 10193;
+             Value avg = rootMoves[pvIdx].averageScore;
+             alpha     = std::max(avg - delta, -VALUE_INFINITE);
+             beta      = std::min(avg + delta, VALUE_INFINITE);
+@@ -1130,7 +1140,7 @@ Value Search::Worker::SEARCH_NODE(
+ 
+         // Null move dynamic reduction based on depth
+         // Odd threads reduce one ply less
+-        Depth R = 7 + depth / 3 + std::max((ss->staticEval - beta) / 256, 0) - int(threadIdx & 1);
++        Depth R = 7 + depth / 3 + std::max((ss->staticEval - beta) / 256, 0) - int((threadIdx + thread_idx_offset()) & 1);
+         R -= seekMate * R / 2;
+         do_null_move(pos, st, ss);
+         TRACE(null_move(R));

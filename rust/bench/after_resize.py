@@ -6,6 +6,10 @@ the trace played over UCI, which must give the recorded UCI output bit for bit
 (README.md, "Threads"). Only the Python standard library.
 
     after_resize.py [--sessions N] [--pool T,...] ENGINE...
+    after_resize.py --record [--sessions N] ENGINE...
+
+With --record, no pool and no comparison: the records of the searches are
+printed, one JSON line each (bench/thread_idx_check.sh digests them).
 
 RUN_PREFIX, if set, is put before ENGINE (an emulator)."""
 
@@ -83,6 +87,7 @@ def main():
     ap.add_argument("--sessions", type=int, default=10000, help="sessions of each set of the sample (all by default)")
     ap.add_argument("--pool", default="4,3", help="the thread counts searched with before")
     ap.add_argument("--timeout", type=float, default=300)
+    ap.add_argument("--record", action="store_true", help="print the records, compare nothing")
     ap.add_argument("engine", nargs="+")
     args = ap.parse_args()
 
@@ -93,7 +98,7 @@ def main():
 
     # searches with a larger pool, which fill every table, the shared ones
     # included, and leave helpers' results behind
-    for t in args.pool.split(","):
+    for t in [] if args.record else args.pool.split(","):
         e.send(f"setoption name Threads value {t}")
         e.send("setoption name Hash value 8")
         e.send("setoption name MultiPV value 2")
@@ -130,6 +135,10 @@ def main():
                         ponder = words[3] if len(words) > 3 and words[2] == "ponder" else None
                 record = next(expected)
                 got = {"info": info, "bestmove": bestmove, "ponder": ponder}
+                if args.record:
+                    print(json.dumps({"set": name, "session": number, **got}, separators=(",", ":")))
+                    checked += 1
+                    continue
                 want = {k: record[k] for k in got}
                 if got != want:
                     sys.exit(f"{name} session {number} ({session}): differs after the pool {args.pool}:\n"
@@ -137,6 +146,8 @@ def main():
                 checked += 1
     e.send("quit")
     e.p.wait(timeout=args.timeout)
+    if args.record:
+        return
     print(f"OK: {checked} searches identical to the trace sample after searches with Threads {args.pool}")
 
 

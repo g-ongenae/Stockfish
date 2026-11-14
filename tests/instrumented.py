@@ -1356,6 +1356,22 @@ def parse_args():
     parser.add_argument(
         "--none", action="store_true", help="Run without any testing options"
     )
+    parser.add_argument(
+        "--no-syzygy",
+        action="store_true",
+        help="Do not download the Syzygy tables and skip TestSyzygy",
+    )
+    parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="Run every test of a suite even after one fails",
+    )
+    parser.add_argument(
+        "--skip",
+        action="append",
+        default=[],
+        help="Skip the tests matching Suite.test (fnmatch), repeatable",
+    )
     parser.add_argument("stockfish_path", type=str, help="Path to Stockfish binary")
 
     return parser.parse_args()
@@ -1365,13 +1381,13 @@ if __name__ == "__main__":
     args = parse_args()
 
     EPD.create_bench_epd()
-    Syzygy.download_syzygy()
+    if not args.no_syzygy:
+        Syzygy.download_syzygy()
 
     framework = MiniTestFramework()
+    framework.stop_on_failure = not args.keep_going
 
-    # Each test suite will be run inside a temporary directory
-    framework.run(
-        [
+    suites = [
             TestCLI,
             TestInteractive,
             TestSyzygy,
@@ -1385,8 +1401,17 @@ if __name__ == "__main__":
             TestDumpLineFile,
             TestSearchTraceUCI,
             TestSearchTrace,
+    ]
+    if args.no_syzygy:
+        suites.remove(TestSyzygy)
+    for suite in suites:
+        suite.__ordered__ = [
+            m for m in suite.__ordered__
+            if not any(fnmatch.fnmatch(f"{suite.__name__}.{m}", p) for p in args.skip)
         ]
-    )
+
+    # Each test suite will be run inside a temporary directory
+    framework.run(suites)
 
     EPD.delete_bench_epd()
 

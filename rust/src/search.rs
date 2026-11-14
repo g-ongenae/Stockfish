@@ -650,6 +650,27 @@ impl Worker {
         self.thread_idx == 0
     }
 
+    /// `threadIdx` where the search depends on it (the aspiration window,
+    /// the null move reduction). The feature `thread_idx_offset` adds the
+    /// value of `SF_THREAD_IDX_OFFSET` to it, so that a single thread
+    /// searches as thread k would, to compare with a C++ engine patched
+    /// alike (`bench/thread_idx_offset.patch`, README.md, "Threads").
+    #[inline(always)]
+    fn search_idx(&self) -> usize {
+        #[cfg(feature = "thread_idx_offset")]
+        {
+            static OFFSET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            self.thread_idx
+                + *OFFSET.get_or_init(|| {
+                    std::env::var("SF_THREAD_IDX_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+                })
+        }
+        #[cfg(not(feature = "thread_idx_offset"))]
+        {
+            self.thread_idx
+        }
+    }
+
     /// `nodes`, this worker's count, read by this worker.
     #[inline(always)]
     pub fn nodes(&self) -> u64 {
@@ -972,7 +993,7 @@ impl Worker {
                 self.sel_depth = 0;
 
                 // Reset aspiration window starting size
-                delta = (5 + self.thread_idx % 8 + (self.root_moves[pv_idx].mean_squared_score.abs() / 10193) as usize)
+                delta = (5 + self.search_idx() % 8 + (self.root_moves[pv_idx].mean_squared_score.abs() / 10193) as usize)
                     as i32;
                 let avg = self.root_moves[pv_idx].average_score;
                 alpha = (avg - delta).max(-VALUE_INFINITE);
@@ -2112,7 +2133,7 @@ impl Worker {
                 // Null move dynamic reduction based on depth
                 // Odd threads reduce one ply less
                 let mut r: Depth =
-                    7 + depth / 3 + ((self.stack[ss].static_eval - beta) / 256).max(0) - (self.thread_idx & 1) as i32;
+                    7 + depth / 3 + ((self.stack[ss].static_eval - beta) / 256).max(0) - (self.search_idx() & 1) as i32;
                 r -= self.seek_mate as i32 * r / 2;
                 self.do_null_move(pos, ss);
                 trace!(self, TRACE, null_move(r));

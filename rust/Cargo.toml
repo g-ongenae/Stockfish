@@ -27,6 +27,11 @@ softfloat = []
 # target, as the 32-bit targets do (src/misc.rs, RelaxedCounter), to test
 # that path natively.
 counter32 = []
+# Add the value of the environment variable SF_THREAD_IDX_OFFSET to the index
+# of each thread where the search depends on it, to compare a single thread
+# searching as thread k with the C++ engine patched alike
+# (bench/thread_idx_offset.patch).
+thread_idx_offset = []
 
 [profile.release]
 opt-level = 3
