@@ -199,6 +199,7 @@ impl Engine {
             show_wdl: self.options.int("UCI_ShowWDL") != 0,
             move_overhead: self.options.int("Move Overhead") as i32,
             nodestime: self.options.int("nodestime") as i32,
+            ponder: self.options.int("Ponder") != 0,
             syzygy_50_move_rule: self.options.int("Syzygy50MoveRule") != 0,
         }
     }

@@ -349,8 +349,6 @@ impl UciEngine {
 
         if limits.perft != 0 {
             self.perft(limits.perft);
-        } else if limits.use_time_management() {
-            println!("info string Time management is not ported yet: use go depth, nodes, movetime or infinite");
         } else {
             self.engine.go(limits);
         }
