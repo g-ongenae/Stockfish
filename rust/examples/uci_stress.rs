@@ -148,6 +148,8 @@ struct Engine {
 }
 
 impl Engine {
+    // the child is waited for by wait_exit() or by Drop
+    #[allow(clippy::zombie_processes)]
     fn start(cmd: &[String]) -> Engine {
         let mut child = Command::new(&cmd[0])
             .args(&cmd[1..])
