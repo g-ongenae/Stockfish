@@ -501,7 +501,9 @@ value, eval) and 21-bit keys packed in a 64-bit word; the cluster of a key is
 checks it against the 32-bit-halves fallback of C++); `probe()`, `write()`
 with its secondary ageing, `penalize()`, `hashfull()`, `new_search()` with
 the 5-bit generation. Every field is a relaxed atomic as in C++, the keys
-word as two 32-bit halves (32-bit PowerPC has no 64-bit atomics). The trace
+word an `AtomicU64` read and written whole (since layer 9; on 32-bit
+PowerPC, which has no 64-bit atomics, two halves under a spin lock, see
+"Threads", "Review"). The trace
 fixes `Hash` at 2 MB; beyond it, `bench/tt_check.cpp` (the C++ table) and
 `examples/tt_check.rs` print the same 35 lines over 100,000 random probes,
 writes, penalties, new searches and hashfull counts at each of 1, 2, 3, 5, 7,
@@ -1021,7 +1023,7 @@ atomic; no `unsafe`, no lock on the path of a node.
 | `bestMoveChanges` | the owner (++), main thread (reset) | main thread, end of iteration | `AtomicU64` or `AtomicU32`, relaxed load and store, racing as in C++ |
 | limits, options, root position and its history, root moves, `tbConfig` | `start_thinking()`, before waking the main thread | the worker's own copy | copied into each worker while its thread is idle: immutable for the search, ordered before it by the thread's mutex |
 | the network | `EvalFile`, between searches | every worker | `Arc<Network>`, immutable |
-| the transposition table | every worker | every worker | `Arc<TranspositionTable>`, every field a relaxed atomic (layer 7), races as in C++ |
+| the transposition table | every worker | every worker | `Arc<TranspositionTable>`, every field a relaxed atomic (layer 7), races as in C++; the keys word of a cluster read and written whole (an `AtomicU64`; on 32-bit PowerPC two halves under one of 64 spin locks, as libatomic does for C++ there) |
 | the shared histories | every worker | every worker | `Arc<SharedHistories>`, every entry an `AtomicI16`, relaxed load then store (layer 6), races as in C++ |
 | the main manager (time manager, `iterValue`, ...) | main thread | main thread | owned by the main worker |
 | helpers' root moves, `rootDepth`, PV | each helper | main thread after waiting for them (`get_best_thread()`, output) | through the helper's worker mutex, after `wait_for_search_finished()` |
@@ -1244,6 +1246,41 @@ With one thread, `bench`, CPU time, three interleaved runs: master 155,683
 171,920, 173,966. The node counter is now a relaxed atomic in the worker's
 `ThreadCounters` (one more indirection per node, a plain load and store on
 x86-64): no cost visible within the noise.
+
+### Review
+
+An independent review by GPT-6.1 Sol (Codex), read-only, of the C++ and the
+Rust where no gate reaches, and for concurrency defects, found one defect:
+the keys word of a cluster of the transposition table was two `AtomicU32`
+halves (layer 7, harmless with one thread), and the key of the middle entry
+spans both halves: with several threads a probe could read a new low half
+with an old high half, a key never written, and take an unrelated entry for
+a hit (Sol's harness: 148,991 false hits in 4.9 million probes). C++'s
+`RelaxedAtomic<u64>` cannot tear. Fixed: an `AtomicU64` on every target that
+has 64-bit atomics (x86-64, i586, ARMv7); on 32-bit PowerPC, which has none,
+two halves read and written under one of 64 spin locks chosen by the
+cluster's address, as C++'s `std::atomic<u64>` does there through
+libatomic (a lock on the path of a probe on that target only, uncontended
+with one thread); the feature `counter32` selects that form, to test it on
+x86-64. A unit test with a writer alternating the middle key between two
+values that differ in both halves and two readers sees a torn word on the
+old code and none on either form. Re-run after the fix: `tt_check` against
+the C++ output (both forms), `threads_check`, the trace sample, `bench`
+(both forms), the trace sample after a larger pool, the stress test (both
+forms), and bench speed (master 171,384, 170,709, 170,987 nodes per
+second; this layer 173,617, 173,339, 173,114); CI on every target.
+
+Sol judged correct, with reasons: the reads and resets of `bestMoveChanges`
+(in thread order, relaxed, racing as in C++); `elapsed()`, `check_time()`
+and `advance_nodes_time()` on the summed nodes; the choice of the best
+thread and its output, and `extract_ponder_from_tt()` on the best worker's
+position; the reset of every worker in `start_thinking()`; the condition
+variables (one mutex, predicates in loops, no lost wake-up, no reverse lock
+order between the main worker and the helpers, no ownership cycle); resizes,
+table and network changes after waiting; the table's clear ranges; the
+32-bit counter under its single-writer contract; `quit`, ponder and infinite
+searches. What it could not check: all interleavings, ThreadSanitizer or
+Miri, real 32-bit hardware, more than two cores, playing strength.
 
 ### For the next layers
 
