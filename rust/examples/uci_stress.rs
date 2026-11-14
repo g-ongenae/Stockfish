@@ -389,7 +389,13 @@ impl Session {
                 ("depth", format!("go depth {}", 6 + self.rng.below(if self.light { 2 } else { 8 })))
             }
         } else if k < 25 {
-            let max = if self.rng.chance(30) { 1000 } else if self.light { 20_000 } else { 300_000 };
+            let max = if self.rng.chance(30) {
+                1000
+            } else if self.light {
+                20_000
+            } else {
+                300_000
+            };
             ("nodes", format!("go nodes {}", 1 + self.rng.below(max)))
         } else if k < 45 {
             ("depth", format!("go depth {}", 1 + self.rng.below(if self.light { 7 } else { 13 })))

@@ -271,13 +271,7 @@ fn engine_states() {
 fn best_thread() {
     let mut rng = Rng(7);
     // e2e4, d2d4, g1f3, c2c4, b1c3
-    let moves = [
-        Move::new(12, 28),
-        Move::new(11, 27),
-        Move::new(6, 21),
-        Move::new(10, 26),
-        Move::new(1, 18),
-    ];
+    let moves = [Move::new(12, 28), Move::new(11, 27), Move::new(6, 21), Move::new(10, 26), Move::new(1, 18)];
     let mut digest: u64 = 0;
     let mut cases = 0;
     for n in [1, 2, 3, 4, 5, 6, 7, 8, 13, 32] {

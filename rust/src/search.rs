@@ -1203,7 +1203,7 @@ impl Worker {
                 // Age out and update PV variability metric
                 tot_best_move_changes = tot_best_move_changes / 2.0;
                 for c in self.flags.counters.iter() {
-                    let changes = c.best_move_changes.load(Relaxed) as u64;
+                    let changes = u64::from(c.best_move_changes.load(Relaxed));
                     tot_best_move_changes = tot_best_move_changes + F64::from_u64(changes);
                     c.best_move_changes.store(0, Relaxed);
                 }

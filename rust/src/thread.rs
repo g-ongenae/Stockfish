@@ -206,10 +206,8 @@ impl Thread {
             worker: Mutex::new(worker),
         });
         let native = inner.clone();
-        let handle = std::thread::Builder::new()
-            .name(format!("search {idx}"))
-            .stack_size(TH_STACK_SIZE)
-            .spawn(move || {
+        let handle =
+            std::thread::Builder::new().name(format!("search {idx}")).stack_size(TH_STACK_SIZE).spawn(move || {
                 let _guard = AbortOnPanic;
                 native.idle_loop();
             });

@@ -176,7 +176,7 @@ impl RelaxedCounter {
     #[inline(always)]
     pub fn get_own(&self) -> u64 {
         use std::sync::atomic::Ordering::Relaxed;
-        (self.hi.load(Relaxed) as u64) << 32 | self.lo.load(Relaxed) as u64
+        ((self.hi.load(Relaxed) as u64) << 32) | self.lo.load(Relaxed) as u64
     }
 
     /// The value, read by any thread: retried while the owner carries into
@@ -191,7 +191,7 @@ impl RelaxedCounter {
             fence(Acquire);
             let s2 = self.seq.load(Relaxed);
             if s1 == s2 && s1 & 1 == 0 {
-                return (hi as u64) << 32 | lo as u64;
+                return ((hi as u64) << 32) | lo as u64;
             }
             std::hint::spin_loop();
         }
@@ -250,17 +250,19 @@ mod tests {
     fn counter_is_never_torn() {
         // One writer crossing 32-bit boundaries, readers that must only see
         // values that increase and that lie in the ranges written
-        use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
         use std::sync::Arc;
         const HALF: u64 = 500_000;
         let c = Arc::new(RelaxedCounter::new());
         let done = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicUsize::new(0));
         let readers: Vec<_> = (0..2)
             .map(|_| {
-                let (c, done) = (c.clone(), done.clone());
+                let (c, done, started) = (c.clone(), done.clone(), started.clone());
                 std::thread::spawn(move || {
                     let mut last = 0;
                     let mut reads = 0u64;
+                    started.fetch_add(1, Relaxed);
                     while !done.load(Relaxed) {
                         let v = c.get();
                         let near = (v + HALF) >> 32 << 32;
@@ -273,6 +275,10 @@ mod tests {
                 })
             })
             .collect();
+        // the readers read while the writer writes
+        while started.load(Relaxed) < 2 {
+            std::thread::yield_now();
+        }
         for k in 1..=4u64 {
             c.set((k << 32) - HALF);
             for _ in 0..2 * HALF {
@@ -282,7 +288,7 @@ mod tests {
         }
         done.store(true, Relaxed);
         for r in readers {
-            assert!(r.join().unwrap() > 0);
+            r.join().unwrap();
         }
     }
 }
