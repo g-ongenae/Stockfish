@@ -17,16 +17,17 @@ it with the differential harness of `tests/differential/`.
 | 5. NNUE evaluation | `nnue/*`, `evaluate.{h,cpp}`, the `Dirties` of `do_move` | `nnue/`, `evaluate.rs`, `position.rs` | `nnue`, `eval` |
 | Repetitions, null move, `dumpline` | `upcoming_repetition` and its cuckoo tables, `is_draw`, `has_repeated`, `do_null_move`, `dump.cpp` | `position.rs`, `dump.rs` | every member of `dumpline` |
 | 6. Move picker, histories | `movepick.{h,cpp}`, `history.h` (every table, the correction histories included) | `movepick.rs`, `history.rs` | `order_main_shallow`, `order_main_deep`, `order_qsearch`, and the drivers of `movepick_check.sh` (see below) |
+| 7. Search, transposition table (one thread) | `search.{h,cpp}`, `tt.{h,cpp}`, `searchtrace.{h,cpp}`, `score.cpp`, and of `thread`, `engine`, `uci`, `ucioption`, `timeman`, `benchmark` what a search without a clock needs | `search.rs`, `tt.rs`, `searchtrace.rs`, `score.rs`, `thread.rs`, `engine.rs`, `uci.rs`, `ucioption.rs`, `timeman.rs`, `benchmark.rs` | the search trace (`verify.sh trace`, `trace-uci`), `bench`, and the drivers of `tt_check` (see "The search" below) |
 
 `dump` prints all 22 members of the C++ `dump`, and `dumpline` every member
 of the C++ `dumpline`.
 
-Not ported yet: search, transposition table, threads, and UCI beyond
-`setoption name UCI_Chess960`, `setoption name EvalFile`, `position`,
-`go perft`, `dump`, `dumpline`, `d` and `quit`. Search will write to the
-history tables and drive the move picker; until then the picker is checked
-beyond `dump` by the drivers of `movepick_check.sh` (see "The move picker"
-below).
+Not ported yet: more than one thread, time management (`go wtime/btime`
+is refused with an `info string`), Syzygy tablebases, `eval`, `flip`,
+`export_net` and the NUMA options (accepted, without effect). Ported but
+checked by nothing but reading and a few direct comparisons: MultiPV above
+1, skill levels, `searchmoves`, `go mate`, `go infinite`, pondering; see
+"The search", "What the gates do not see".
 
 ## The network
 
@@ -72,8 +73,33 @@ Elsewhere, download it into `src/` and link that:
     EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh full --fields $DUMP_FIELDS
     EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh lines-full --fields $DUMPLINE_FIELDS
 
+    # the search (see "The search"): its UCI output and its event and state
+    # digests on the sample, then on the full corpus; bench; the deepest
+    # searches of the corpus
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh trace-uci
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh trace
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh trace-uci-full
+    EXE=$PWD/target/release/stockfish ../tests/differential/verify.sh trace-full
+    ./search_check.sh bench target/release/stockfish
+    ./search_check.sh deep target/release/stockfish
+    # what the trace does not reach, against the reference binary over UCI
+    # (REF, default the shared folder's oracle/stockfish)
+    ./search_check.sh compare target/release/stockfish
+    # the first event that differs in session N of a corpus, against the
+    # reference tracing binary
+    EXE=$PWD/target/release/stockfish REF=$S/oracle/stockfish-trace \
+        ../tests/differential/search_trace.py bisect ../tests/differential/sample/standard.trace.gz \
+        ../tests/differential/sample/standard.trace.jsonl.gz N
+
     # perft, the positions and node counts of tests/perft.sh
     ./perft.sh target/release/stockfish
+
+    # the transposition table against the C++ one (after the build of src/
+    # below): the same output, which tt_check.expected holds
+    ARCH=x86-64-sse41-popcnt bench/build_tt_check.sh
+    cargo build --release -j2 --example tt_check
+    ./search_check.sh tt target/cpp/tt_check | cmp - tt_check.expected
+    ./search_check.sh tt target/release/examples/tt_check | cmp - tt_check.expected
 
     # the move picker against the C++ one, beyond dump (see "The move picker"):
     # build src/, then the C++ driver against its objects, and compare
@@ -140,8 +166,9 @@ Elsewhere, download it into `src/` and link that:
   the layer stacks that the file stores are allocated, where C++ reserves all
   192. Peak resident memory of `dump` and `dumpline`: 137 MiB, against 343 to
   408 MiB for the C++ binary, which embeds the network in its executable and
-  copies it into its `Network`, and allocates a hash table. Before a network is
-  needed the port uses 11 MiB.
+  copies it into its `Network`, and allocates a hash table. (Since layer 7 the
+  engine also holds its hash table and histories from the start: see "The
+  search", "Memory".)
 - **No allocation per move or per evaluation.** The accumulator stack
   (`MAX_PLY + 1` states, 1.1 MiB) and the refresh cache (384 entries, 0.8 MiB)
   are allocated once; the dirty piece, threat and pawn lists and the feature
@@ -215,7 +242,7 @@ their runs, across positions, and still print what C++ prints.
 A search frame holds a picker of 2.1 KiB (and qsearch frames one too), as in
 C++: at `MAX_PLY` the recursion needs about as much stack as C++, which runs
 its search threads on 8 MiB stacks. Rust gives spawned threads 2 MiB by
-default; layer 7 must ask for more.
+default; layer 7 runs its searches on a thread with 8 MiB (see "The search").
 
 ### The tables
 
@@ -348,6 +375,287 @@ Still checked only by reading: the AVX-512 variant of the sort, left out (the
 golden files come from the SSE4.1 build); behavior that needs more than one
 thread (none is shared yet); and the C++ `assert`s, which neither release
 build evaluates.
+
+## The search
+
+`search.rs` ports `search.cpp` function for function and, inside each
+function, statement for statement, with the comments of C++: put the two side
+by side. `tt.rs` ports `tt.cpp`, `searchtrace.rs` the C++ tracing build, and
+`thread.rs`, `engine.rs`, `uci.rs`, `ucioption.rs`, `timeman.rs`, `score.rs`
+and `benchmark.rs` what a search without a clock needs of their C++
+counterparts: `go depth/nodes/movetime/mate/infinite/ponder/searchmoves`,
+`stop`, `ponderhit`, `ucinewgame`, `setoption` with every option of C++ (same
+names, types, defaults and bounds, printed by `uci` as C++ prints them),
+`Clear Hash`, the `info` lines with their score formatting (`cp`, `mate`,
+bounds, `wdl`), `bestmove` and `ponder`, `bench` with its arguments, and
+`searchtrace`.
+
+### Design decisions
+
+- **The search stack, the PV lines and the move pickers are allocated once**,
+  in the worker. The stack is a vector of `MAX_PLY + 10` entries (C++
+  allocates the same array on the stack of `iterative_deepening()`, zeroed at
+  each search: so is this one) and `ss` an index into it. It holds flat
+  indices into the continuation and continuation-correction histories instead
+  of the C++ pointers (layer 6's API), and a flag instead of the `pv`
+  pointer: that pointer is either null or the local line of the parent node,
+  so the line of a node at ply `p` is always row `p` of a table of
+  `MAX_PLY + 3` lines, which each node empties on entry as the C++
+  constructor of its local does. The pickers are two per ply, renewed (layer
+  6's API): one for the nodes searched without an excluded move and one for
+  the singular extension searches, which run at the ply of a node whose
+  picker is in use; no other search runs at the ply of a live picker. There
+  is no allocation per node: the root moves and their PVs are allocated per
+  search.
+- **The position is a copy of the UCI position, history included.** C++ sets
+  the root position from the FEN and copies the last `StateInfo`, which links
+  to the states of the moves played before: the same position with the same
+  history, which a clone of `Position` is. Room for `MAX_PLY + 10` more states
+  is reserved before the search, so the state stack does not grow in it.
+- **One thread, with the seams of C++.** `Engine`, `ThreadPool`, `Worker`,
+  `SearchManager`, the shared transposition table (`Arc`) and the shared
+  histories (`Arc<SharedHistories>`) are there, with the C++ division of
+  work. The thread layer has to make the pool hold several workers and run
+  them; what they share is already shared by `&`: every field of the table
+  and every entry of the shared histories is a relaxed atomic, and the
+  workers' clears of the shared histories go through shared references
+  (`DynStats::clear_range(&self)`, `ContinuationHistoryBlock::fill_shared`),
+  which answers the finding of the review of layer 6.
+- **The search runs on a thread made for it, with a stack of 8 MiB**
+  (`TH_STACK_SIZE`, as C++ asks for its threads), on every target: the default
+  stack of a spawned Rust thread is 2 MiB and that of a musl thread 128 KiB.
+  The worker moves to that thread for the search and back. A search frame
+  takes 1.7 KiB on x86-64 and a quiescence frame 1.3 KiB (most of it the
+  buffers of the NNUE evaluation, inlined); a ply holds one search frame,
+  sometimes up to three (the singular extension and null move verification
+  searches run at the ply of their node), and the leaves a quiescence frame:
+  at `MAX_PLY` that is at most about 1.3 MiB, a sixth of the stack. The
+  deepest searches of the full corpus (selective depth 30 to 34,
+  `tests/search/deep.*`) run in CI on every target, i586 musl included.
+- **No clock yet.** `timeman.rs` has the start time and `nodestime`, and
+  unbounded limits; `go wtime/btime` is refused with an `info string`, since
+  time management (and its doubles) belongs to a later layer.
+- **No tablebases.** Without them C++ ranks no root move and never probes
+  (the cardinality is 0); the port keeps the structure (`TbConfig`) and
+  `syzygy_extend_pv()` in the form it takes without tables (the draw check at
+  the end of the PV).
+
+### The search trace in the port, and what it costs
+
+C++ builds a second binary with `SEARCH_TRACE` defined. The port has one
+binary with two instances of the search: the search functions take a
+`const TRACE: bool`, every hook is `if TRACE { ... }` (the `trace!` macro of
+`searchtrace.rs`), and `go` runs the instance with `false`, from which the
+compiler removes the hooks; `searchtrace` runs the instance with `true`, whose
+hooks test that a tracer is set, as the C++ ones test a pointer. The events
+are emitted where `search.cpp` has its `TRACE(...)`, in its order, formatted
+byte for byte as C++ formats them. Both instances give bench 3464885 (the
+traced one through `searchtrace` on the sample and the full corpus). The
+cost of the second instance is code size only: the binary is 1,207 KiB against 1,050 KiB with
+`searchtrace` running the untraced instance (a local build made for the
+measurement), and their `bench` speeds are the same within the noise (three
+interleaved runs each: 170,047 to 174,685 nodes per second against 170,122
+to 173,591).
+
+### The transposition table
+
+`tt.rs` keeps the C++ layout and arithmetic: 32-byte clusters of three
+8-byte entries (depth offset by `DEPTH_NONE`, generation/bound/pv byte, move,
+value, eval) and 21-bit keys packed in a 64-bit word; the cluster of a key is
+`mul_hi64(key, clusterCount)`, through `u128` on every target (the unit test
+checks it against the 32-bit-halves fallback of C++); `probe()`, `write()`
+with its secondary ageing, `penalize()`, `hashfull()`, `new_search()` with
+the 5-bit generation. Every field is a relaxed atomic as in C++, the keys
+word as two 32-bit halves (32-bit PowerPC has no 64-bit atomics). The trace
+fixes `Hash` at 2 MB; beyond it, `bench/tt_check.cpp` (the C++ table) and
+`examples/tt_check.rs` print the same 35 lines over 100,000 random probes,
+writes, penalties, new searches and hashfull counts at each of 1, 2, 3, 5, 7,
+16 and 33 MB, checked in CI natively against a fresh build of `src/` and on
+the emulated targets against `tt_check.expected`. Ten bugs planted one at a
+time in `tt.rs` all change that output (the age weight of the replacement,
+ties in the choice of the replaced entry, the threshold and the decisive
+test of the secondary ageing, the pv bonus of the overwrite test, the floor
+of `penalize()`, the kept move, the age bound of `hashfull()`, the cluster
+index, the 21-bit key). The searches themselves are compared at other sizes
+below.
+
+### Floating point
+
+Four floating-point expressions of this commit reach the search or the
+output (time management's and skill levels' are out of scope):
+
+- the reduction table, `int(2872 / 128.0 * std::log(i))`: a constant table in
+  the port (`REDUCTIONS`), which a unit test recomputes from the formula.
+  Every exact value lies at least 0.0027 from an integer (checked at 60
+  digits), so any `ln` within a relative 1e-5 of the true one gives this
+  table, the C++ one included;
+- `to_cp()`, `round(100 * v / a)` with `a` a cubic in the material: computed
+  in doubles as in C++, same order (Rust never fuses operations, the C++
+  builds have no FMA). Over all 62 material counts and every non-decisive
+  value, `100 * v / a` stays at least 3.1e-7 from a half integer, and the
+  double result equals the exact one (checked with rationals), so x87
+  extended precision on i586 cannot change it; a unit test checks the margin
+  with the target's own arithmetic, and values against the C++ output;
+- the WDL model, `int(0.5 + 1000 / (1 + exp((a - v) / b)))` (`UCI_ShowWDL`):
+  over every material count and every value, at least 2.5e-6 from an integer,
+  so any `exp` accurate to about 1e-9 (glibc's, musl's, x87's) gives C++'s
+  result; a unit test checks the margin on each target, and the `wdl` field
+  is compared with the reference binary below;
+- `Skill` (strength limit): ported, out of scope, checked by nothing.
+
+### What the gates do not see, and what checks it
+
+The corpus of the trace searches to depth 10 at most (selective depth 34),
+at 2 MB of hash, with fixed options. The event counts of the corpus are in
+`tests/differential/README.md` ("The corpus of the trace"); the port's
+`searchtrace ... counts` gives the same since the full gate passes. Never or
+almost never fired there: `immediate:max_ply` (never), `skip:root` (never:
+MultiPV or `searchmoves` only), `stalemate` (198), `tt_cutoff_refused`
+(738), `null_move_verification` (5,035), `tt_cutoff_rule50` (none in
+Chess960). Branches without events were counted with a temporarily
+instrumented build over the full corpus. Never reached there: the MultiPV
+guard for aborted lines, `go mate`'s stop, the `forgottenMate` rollback (the
+rollback ran 52 times, for aborted loss searches only), the depth-1 aborted
+loss label, the output on aspiration failures past 10M nodes and the
+`currmove` lines, the `usePreviousScore` output, the `-VALUE_INFINITE` output
+fallback, the depth cap at `MAX_PLY - 1`, and `searchAgainCounter` (time
+management only); rare: `is_shuffling()` (24 times), a draw in
+`extract_ponder_from_tt()` (53).
+
+So the port is also compared with the reference binary directly over UCI
+(`bench/compare_uci.py`, `./search_check.sh compare`, in CI against the C++
+engine the job builds): `tests/search/extra*.sessions` (mates and stalemates
+at the root and in the tree, `go mate` finding and not finding its mate,
+rule50 at 90 to 99 in both variants, `searchmoves`, a search of 11M nodes
+with its `currmove` lines and failure outputs), `tests/search/long*.sessions`
+(the bench positions to depth 18, Chess960 to depth 20, in one session as
+bench runs them), and parts of the trace sample with `Hash` 1, 3, 5, 7 and
+64, `UCI_ShowWDL`, MultiPV 3 and 4 (with `UCI_ShowWDL`). Every search
+matches, every `info` line included. With MultiPV the guard for aborted lines
+and the `usePreviousScore` output are reached (58 and 56 times); a `go mate`
+that finds its mate reaches the stop.
+
+These comparisons found the one bug the gates missed: `search_node()` kept
+`ss->staticEval` in a local, but the null move verification search (depth 16
+and more) runs on the same entry of the stack and leaves its own corrected
+evaluation there, which C++ then reads. It showed in `go mate` searches to
+depth 22 to 26 at 16 MB, was bisected with the trace at 1 MB (local builds of
+both tracing binaries with that size), and is fixed.
+
+Still checked by nothing but reading against C++: `max_ply` in search and
+qsearch, the depth cap, the `forgottenMate` rollback and the depth-1 loss
+label, the `-VALUE_INFINITE` output fallback, skill levels, pondering
+(`ponderhit`), `go infinite`, `nodestime`, `syzygy_extend_pv()` without
+tables, and everything of more than one thread.
+
+### Integer widths
+
+`Value`, `Depth` and the scores are `i32` as the C++ `int`; the TT fields
+are converted with the C++ truncations (`as u8`, `as i16`). Where C++ mixes
+`int` and `u64` (the averages of the root moves, the bonus of
+`update_all_stats()`), the signed value is converted to `u64` and the
+division is unsigned, which floors instead of truncating: done the same way,
+with a unit test. A debug build (overflow and bounds checks, and the C++
+assertions as `debug_assert!`) runs the whole trace sample without a panic,
+in CI too.
+
+### Memory
+
+Peak resident memory on x86-64 (`getrusage`), against the C++ binary of the
+shared folder (`x86-64-sse41-popcnt`):
+
+| | Rust | C++ |
+| --- | ---: | ---: |
+| started, no network loaded (`isready`) | 49 MiB | 408 MiB |
+| a search with `Hash` 1 (`go depth 12`) | 168 MiB | 408 MiB |
+| `bench` (`Hash` 16) | 183 MiB | 408 MiB |
+
+What the port's is made of: the network, 129 MiB of weights and its layer
+stacks (C++ embeds it in the binary and copies it, hence its 408 MiB from the
+start); the histories, 27.9 MiB, which `clear()` fills with non-zero values
+(half of it the pawn history, 16 MiB; the continuation history 8 MiB; see "The
+tables"); the transposition table, `Hash` MiB, all of it written by its
+clear as in C++; the NNUE accumulator stack (1.1 MiB) and refresh cache (0.8
+MiB); the move pickers of the worker (2 per ply, 2.1 KiB each: 1 MiB); the
+PV lines (124 KiB); the attack tables (0.8 MiB). The search thread's 8 MiB
+stack is reserved, not resident: a search uses a few tens of KiB of it.
+On the target devices the network is the budget: the histories and the
+table come next and are what an option could shrink, but any change of their
+sizes changes the output.
+
+### Speed
+
+`bench` (49 positions, depth 13, 3,464,885 nodes), CPU time, three
+interleaved runs on the Pentium G3450 of the development machine, spread
+about 2%:
+
+| | Nodes per second | |
+| --- | ---: | --- |
+| C++ `x86-64-sse41-popcnt` (the oracle) | 377,000 to 379,000 | 2.2 times the port |
+| Rust, x86-64 baseline (the compiler may use SSE2) | 170,000 to 175,000 | |
+| C++ `general-64` (its scalar path) | 56,300 | 3.1 times slower than the port |
+
+The gates, same machine: `verify.sh trace` (sample) 56 s against 29 s for
+`stockfish-trace`, `trace-uci` 15 s against 9.5 s; `trace-full` 15 min 0 s
+and `trace-uci-full` 3 min 49 s (the reference: about 6 and 3 minutes).
+
+The ratio to C++ is the one of the NNUE evaluation measured with layer 5
+(incremental updates 1.9 times slower than the SSE4.1 build, see "Speed and
+memory"): the search spends most of its time there, and the search code
+itself is not slower than C++'s in any way these numbers show. No speed work
+was done in this layer beyond the design (no allocation per node, pickers
+renewed rather than created, the trace compiled out). Where the next speed
+work should go, in order of evidence:
+
+1. **Profile on the target class first.** This machine has no profiler; the
+   numbers above are totals. A `perf` profile of `bench` (x86-64 and an
+   ARMv7 board) would say how the time splits between the accumulator
+   updates, the network layers, move generation and the picker.
+2. **The NNUE accumulator updates**, the largest known gap: C++ fuses the
+   two perspectives in one pass over the rows
+   (`update_accumulator_incremental_both`), which the port does as two calls,
+   and keeps tiles in registers; the threat features change many rows per
+   move. Tiling and fusing in the scalar code helps every target, SIMD or
+   not.
+3. **Bounds checks** on the history and table indices, checked once per
+   access in the picker's scoring and in search (README of layer 6: the
+   picker is 1.15 to 1.2 times slower than C++'s); proving the indices in
+   range once per move (they are `u8` squares and pieces) would remove most.
+4. On the actual target devices (no SIMD at all), the comparison that
+   matters is with `general-64`, which the port already beats by 3.1 times;
+   measuring on such a device, under its compiler's codegen, comes before
+   tuning for it.
+
+### For the next layers
+
+- **Threads.** `ThreadPool` holds one worker and moves it to a thread made
+  for each search. Several workers need: the pool to keep them (each with
+  its own search thread, or the C++ idle loop), `start_thinking()` to set up
+  each, `get_best_thread()` and the voting of C++ (`start_searching()` now
+  takes the only worker as the best), `nodes_searched()` summed over the
+  workers *during* the search (`check_time()` reads it: today the worker's
+  own `nodes`, a plain `u64`, since 32-bit PowerPC has no 64-bit atomics; a
+  shared counter will need another representation there), the shared
+  histories sized `next_power_of_two(threads)` per NUMA node
+  (`SharedHistories::new` takes the count), each worker's `clear()` of its
+  share (already through `&`), and the transposition table cleared by all.
+  The table and the shared histories are already `Arc` and atomic. The
+  order of the C++ code that depends on `threadIdx` (`delta`, the null move
+  reduction) is ported.
+- **Time management.** `timeman.rs` stops where C++ returns for a search
+  without a clock; `go wtime/btime` is refused. The rest of
+  `TimeManagement::init()`, the end-of-iteration decisions of
+  `iterative_deepening()` (an `unreachable!` marks the spot), `effort` and
+  `bestMoveChanges` (counted, never read), `stopOnPonderhit` and
+  `previousTimeReduction` are what remains; their doubles need the same
+  treatment as those of "Floating point".
+- **The remaining UCI options.** `NumaPolicy`, `Debug Log File`,
+  `SyzygyPath` and the other Syzygy options are accepted and ignored (a
+  `SyzygyPath` prints an `info string`); `eval`, `flip`, `export_net`,
+  `compiler` are not ported. MultiPV, `searchmoves`, `go mate`,
+  `UCI_ShowWDL` and other hash sizes are compared with the reference (see
+  above); skill levels, `UCI_LimitStrength`/`UCI_Elo`, pondering, `go
+  infinite` and `nodestime` are ported and unchecked.
 
 ## Speed and memory
 

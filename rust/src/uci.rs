@@ -1,16 +1,20 @@
-//! The part of `src/uci.cpp` this port needs: the command loop with
-//! `setoption`, `position`, `go perft`, `dump`, `dumpline` and `quit`, and the
-//! UCI notation of moves.
+//! Port of `src/uci.{h,cpp}`: the command loop, the parsing of `go`, the
+//! output of a search (`info` lines with their score formatting, `bestmove`),
+//! `bench`, and the debug commands of the fork (`dump`, `dumpline`,
+//! `searchtrace`).
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 
 use crate::dump::{LineDumper, PositionDumper};
+use crate::engine::Engine;
 use crate::movegen::MoveList;
-use crate::nnue::network::EVAL_FILE_DEFAULT_NAME;
-use crate::nnue::Network;
 use crate::perft::perft_fen;
 use crate::position::{square_to_string, Position};
+use crate::score::Score;
+use crate::search::{InfoFull, InfoIteration, InfoShort, LimitsType, UpdateContext};
+use crate::searchtrace::SearchTraceWindow;
+use crate::timeman::now;
 use crate::types::*;
 
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -52,7 +56,7 @@ pub fn to_move(pos: &Position, s: &[u8]) -> Move {
     Move::none()
 }
 
-fn is_c_space(c: u8) -> bool {
+pub fn is_c_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r')
 }
 
@@ -61,14 +65,34 @@ fn is_c_space(c: u8) -> bool {
 /// which the stream would read as the next token, or None if C++ would fail
 /// (no digits, or out of the range of int).
 fn parse_int_prefix(t: &[u8]) -> Option<(i32, &[u8])> {
+    let (v, rest) = parse_i64_prefix(t)?;
+    Some((i32::try_from(v).ok()?, rest))
+}
+
+/// The same for a 64-bit integer (`TimePoint`).
+fn parse_i64_prefix(t: &[u8]) -> Option<(i64, &[u8])> {
     let sign_len = (t.first() == Some(&b'+') || t.first() == Some(&b'-')) as usize;
     let digits = t[sign_len..].iter().take_while(|c| c.is_ascii_digit()).count();
     if digits == 0 {
         return None;
     }
     let end = sign_len + digits;
-    let v: i32 = std::str::from_utf8(&t[..end]).ok()?.parse().ok()?;
+    let v: i64 = std::str::from_utf8(&t[..end]).ok()?.parse().ok()?;
     Some((v, &t[end..]))
+}
+
+/// The same for an unsigned 64-bit integer: `strtoull` accepts a sign, and
+/// negates in unsigned arithmetic.
+fn parse_u64_prefix(t: &[u8]) -> Option<(u64, &[u8])> {
+    let neg = t.first() == Some(&b'-');
+    let sign_len = (neg || t.first() == Some(&b'+')) as usize;
+    let digits = t[sign_len..].iter().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let end = sign_len + digits;
+    let v: u64 = std::str::from_utf8(&t[sign_len..end]).ok()?.parse().ok()?;
+    Some((if neg { v.wrapping_neg() } else { v }, &t[end..]))
 }
 
 /// The whitespace separated tokens of a command, as `is >> token` reads them.
@@ -91,13 +115,8 @@ impl<'a> Iterator for Tokens<'a> {
 }
 
 pub struct UciEngine {
-    /// The position as set by `position`, and the moves leading to it.
-    pos: Position,
-    chess960: bool,
+    engine: Engine,
     current_cmd: Vec<u8>,
-    /// The `EvalFile` option, and the network read from it, loaded on first use.
-    eval_file: Vec<u8>,
-    network: Option<(Vec<u8>, Network)>,
 }
 
 impl Default for UciEngine {
@@ -108,15 +127,7 @@ impl Default for UciEngine {
 
 impl UciEngine {
     pub fn new() -> UciEngine {
-        let mut pos = Position::new();
-        pos.set(START_FEN.as_bytes(), false).expect("start position");
-        UciEngine {
-            pos,
-            chess960: false,
-            current_cmd: Vec::new(),
-            eval_file: EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec(),
-            network: None,
-        }
+        UciEngine { engine: Engine::new(), current_cmd: Vec::new() }
     }
 
     fn terminate_on_critical_error(&self, message: &[u8]) -> ! {
@@ -139,6 +150,7 @@ impl UciEngine {
                 cmd.push(b' ');
             }
             self.execute(&cmd);
+            self.engine.wait_for_search_finished();
             return;
         }
 
@@ -156,6 +168,7 @@ impl UciEngine {
                 break;
             }
         }
+        self.engine.wait_for_search_finished();
     }
 
     /// Executes one command, returns false on `quit`.
@@ -163,51 +176,54 @@ impl UciEngine {
         self.current_cmd = cmd.to_vec();
         let mut tokens = Tokens { rest: cmd };
         let token = tokens.next().unwrap_or(b"");
-        let mut out = io::stdout().lock();
 
         match token {
-            b"quit" | b"stop" => return token != b"quit",
+            b"quit" | b"stop" => {
+                self.engine.stop();
+                return token != b"quit";
+            }
+            // The GUI sends 'ponderhit' to tell that the user has played the
+            // expected move. So, 'ponderhit' is sent if pondering was done on
+            // the same move that the user has played. The search should
+            // continue, but should also switch from pondering to the normal
+            // search.
+            b"ponderhit" => self.engine.set_ponderhit(false),
             b"uci" => {
+                let mut out = io::stdout().lock();
                 let _ = writeln!(
                     out,
-                    "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n"
+                    "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n{}",
+                    self.engine.options.uci_list()
                 );
-                let _ = writeln!(out, "option name EvalFile type string default {EVAL_FILE_DEFAULT_NAME}");
-                let _ = writeln!(out, "option name UCI_Chess960 type check default false");
                 let _ = writeln!(out, "uciok");
             }
             b"isready" => {
-                let _ = writeln!(out, "readyok");
+                let _ = writeln!(io::stdout().lock(), "readyok");
             }
-            b"ucinewgame" => {}
-            b"setoption" => {
-                drop(out);
-                self.setoption(tokens);
-            }
-            b"position" => {
-                drop(out);
-                self.position(tokens);
-            }
-            b"go" => {
-                drop(out);
-                self.go(tokens);
-            }
-            b"dump" => {
-                drop(out);
-                self.dump(tokens.next());
-            }
+            b"ucinewgame" => self.engine.search_clear(),
+            b"setoption" => self.setoption(tokens),
+            b"position" => self.position(tokens),
+            b"go" => self.go(tokens),
+            b"bench" => self.bench(tokens),
+            b"dump" => self.dump(tokens.next()),
             b"dumpline" => {
-                drop(out);
                 // std::getline(args >> std::ws, rest)
                 let start = tokens.rest.iter().position(|&c| !is_c_space(c)).unwrap_or(tokens.rest.len());
                 self.dump_line(&tokens.rest[start..]);
             }
+            b"searchtrace" => self.search_trace(tokens),
             b"d" => {
-                let _ = writeln!(out, "\nFen: {}\nKey: {:016X}", self.pos.fen(), self.pos.key());
+                let _ = writeln!(
+                    io::stdout().lock(),
+                    "\nFen: {}\nKey: {:016X}",
+                    self.engine.pos.fen(),
+                    self.engine.pos.key()
+                );
             }
             b"" => {}
             t if t[0] == b'#' => {}
             _ => {
+                let mut out = io::stdout().lock();
                 let _ = out.write_all(b"Unknown command: '");
                 let _ = out.write_all(cmd);
                 let _ = out.write_all(b"'. Type help for more information.\n");
@@ -217,6 +233,7 @@ impl UciEngine {
     }
 
     fn setoption<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
+        self.engine.wait_for_search_finished();
         tokens.next(); // Consume the "name" token
         let mut name = Vec::new();
         let mut value = Vec::new();
@@ -235,20 +252,9 @@ impl UciEngine {
             }
             value.extend_from_slice(t);
         }
-
-        if name.eq_ignore_ascii_case(b"EvalFile") {
-            self.eval_file = value;
-        } else if name.eq_ignore_ascii_case(b"UCI_Chess960") {
-            // A check option only takes "true" or "false"
-            if value == b"true" || value == b"false" {
-                self.chess960 = value == b"true";
-            }
-        } else {
-            let mut out = io::stdout().lock();
-            let _ = out.write_all(b"No such option: ");
-            let _ = out.write_all(&name);
-            let _ = out.write_all(b"\n");
-        }
+        let name = String::from_utf8_lossy(&name).into_owned();
+        let value = String::from_utf8_lossy(&value).into_owned();
+        self.engine.setoption(&name, &value);
     }
 
     fn position<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
@@ -270,51 +276,95 @@ impl UciEngine {
             _ => return,
         }
 
-        let mut pos = Position::new();
-        if let Err(e) = pos.set(&fen, self.chess960) {
+        let moves: Vec<&[u8]> = tokens.collect();
+        if let Err(e) = self.engine.set_position(&fen, &moves) {
             self.terminate_on_critical_error(e.what());
         }
-        for t in tokens {
-            let m = to_move(&pos, t);
-            if m == Move::none() {
-                let mut msg = b"Illegal move: ".to_vec();
-                msg.extend_from_slice(t);
-                self.terminate_on_critical_error(&msg);
-            }
-            pos.do_move(m);
-        }
-        self.pos = pos;
     }
 
-    fn go<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
-        let mut depth: Depth = 0;
+    /// `parse_limits()`: the arguments of `go`. A numeric argument is read
+    /// as `is >> n` reads it: its numeric prefix, the rest of the token being
+    /// read as the next token; a failure ends the program.
+    fn parse_limits<'a>(&self, mut tokens: impl Iterator<Item = &'a [u8]>) -> LimitsType {
+        let mut limits = LimitsType { start_time: now(), ..LimitsType::default() }; // The search starts as early as possible
+
         let mut pending: Option<&[u8]> = None;
         while let Some(t) = pending.take().or_else(|| tokens.next()) {
-            if t == b"perft" {
-                // `is >> limits.perft`: reads a numeric prefix, and the rest
-                // of the token is read as the next token.
-                match tokens.next().and_then(parse_int_prefix) {
-                    Some((d, rest)) => {
-                        depth = d;
-                        if !rest.is_empty() {
-                            pending = Some(rest);
+            if t == b"searchmoves" {
+                // Needs to be the last command on the line
+                for m in tokens.by_ref() {
+                    limits.searchmoves.push(String::from_utf8_lossy(&m.to_ascii_lowercase()).into_owned());
+                }
+                break;
+            }
+
+            macro_rules! read {
+                ($parse:ident, $field:expr) => {{
+                    match tokens.next().and_then($parse) {
+                        Some((v, rest)) => {
+                            $field = v;
+                            if !rest.is_empty() {
+                                pending = Some(rest);
+                            }
+                        }
+                        None => {
+                            let mut msg = b"Invalid argument for '".to_vec();
+                            msg.extend_from_slice(t);
+                            msg.push(b'\'');
+                            self.terminate_on_critical_error(&msg);
                         }
                     }
-                    None => self.terminate_on_critical_error(b"Invalid argument for 'perft'"),
-                }
+                }};
+            }
+
+            match t {
+                b"wtime" => read!(parse_i64_prefix, limits.time[WHITE as usize]),
+                b"btime" => read!(parse_i64_prefix, limits.time[BLACK as usize]),
+                b"winc" => read!(parse_i64_prefix, limits.inc[WHITE as usize]),
+                b"binc" => read!(parse_i64_prefix, limits.inc[BLACK as usize]),
+                b"movestogo" => read!(parse_int_prefix, limits.movestogo),
+                b"depth" => read!(parse_int_prefix, limits.depth),
+                b"nodes" => read!(parse_u64_prefix, limits.nodes),
+                b"movetime" => read!(parse_i64_prefix, limits.movetime),
+                b"mate" => read!(parse_int_prefix, limits.mate),
+                b"perft" => read!(parse_int_prefix, limits.perft),
+                b"infinite" => limits.infinite = 1,
+                b"ponder" => limits.ponder_mode = true,
+                _ => {}
             }
         }
-        if depth == 0 {
-            println!("info string only 'go perft <depth>' is supported by this port");
-            return;
+
+        // Sanitize negative time values, zero for stm means no TM
+        for t in limits.time.iter_mut().chain(std::iter::once(&mut limits.movetime)) {
+            if *t < 0 {
+                *t = 1;
+            }
         }
 
+        limits
+    }
+
+    fn go<'a>(&mut self, tokens: impl Iterator<Item = &'a [u8]>) {
+        let limits = self.parse_limits(tokens);
+
+        if limits.perft != 0 {
+            self.perft(limits.perft);
+        } else if limits.use_time_management() {
+            println!("info string Time management is not ported yet: use go depth, nodes, movetime or infinite");
+        } else {
+            self.engine.go(limits);
+        }
+    }
+
+    fn perft(&mut self, depth: Depth) -> u64 {
+        self.engine.wait_for_search_finished();
         let stdout = io::stdout();
         let mut out = io::BufWriter::new(stdout.lock());
-        let fen = self.pos.fen();
-        match perft_fen(fen.as_bytes(), depth, self.chess960, &mut out) {
+        let fen = self.engine.pos.fen();
+        match perft_fen(fen.as_bytes(), depth, self.engine.chess960(), &mut out) {
             Ok(nodes) => {
                 let _ = writeln!(out, "\nNodes searched: {nodes}\n");
+                nodes
             }
             Err(e) => {
                 drop(out);
@@ -323,61 +373,122 @@ impl UciEngine {
         }
     }
 
-    /// Loads the network of the `EvalFile` option if it is not loaded yet, or
-    /// terminates as C++ does when it cannot (`Engine::verify_network`). The
-    /// file is looked for as given (relative to the working directory), then
-    /// in the directory of the binary. It is read, not embedded in the binary.
-    fn verify_network(&mut self) -> &Network {
-        let mut path = self.eval_file.clone();
-        if path.is_empty() {
-            path = EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec();
-        }
+    /// `bench`: searches the positions of the benchmark (or of a file) and
+    /// prints the total of the nodes searched, the bench signature.
+    fn bench<'a>(&mut self, tokens: impl Iterator<Item = &'a [u8]>) {
+        use std::sync::{Arc, Mutex};
 
-        if self.network.as_ref().map(|(p, _)| p) != Some(&path) {
-            self.network = None;
-            let mut dirs = vec![std::path::PathBuf::new()];
-            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
-                dirs.push(dir);
-            }
-            for dir in dirs {
-                let Ok(file) = File::open(dir.join(path_from_bytes(&path))) else { continue };
-                if let Some(net) = Network::load(BufReader::with_capacity(1 << 16, file)) {
-                    self.network = Some((path.clone(), net));
-                    break;
-                }
-            }
+        // (a Mutex, not an AtomicU64: 32-bit PowerPC has no 64-bit atomics)
+        let nodes_searched = Arc::new(Mutex::new(0u64));
+        let saved = self.engine.update_context();
+        let ns = nodes_searched.clone();
+        self.engine.set_update_context(UpdateContext {
+            on_update_no_moves: Box::new(on_update_no_moves),
+            on_update_full: Box::new(move |i: &InfoFull| {
+                *ns.lock().unwrap() = i.nodes;
+                on_update_full(i);
+            }),
+            on_iter: Box::new(on_iter),
+            on_bestmove: Box::new(on_bestmove),
+            on_start: Box::new(|| {}),
+        });
 
-            let name = String::from_utf8_lossy(&path).into_owned();
-            let mut out = io::stdout().lock();
-            match &self.network {
-                Some((_, net)) => {
-                    let _ = writeln!(
-                        out,
-                        "info string NNUE evaluation using {name} ({}MiB, ({}, {}, {}, {}, 1))",
-                        net.reported_size_mib(),
-                        crate::nnue::feature_transformer::INPUT_DIMENSIONS,
-                        crate::nnue::L1,
-                        crate::nnue::L2,
-                        crate::nnue::L3
-                    );
-                }
-                None => {
-                    let msg = [
-                        "Network evaluation parameters compatible with the engine must be available.".to_string(),
-                        format!("The network file {name} was not loaded successfully."),
-                        "The UCI option EvalFile might need to specify the full path, including the directory name, to the network file.".to_string(),
-                        format!("The default net can be downloaded from: https://tests.stockfishchess.org/api/nn/{EVAL_FILE_DEFAULT_NAME}"),
-                        "The engine will be terminated now.".to_string(),
-                    ];
-                    for line in msg {
-                        let _ = writeln!(out, "info string ERROR: {line}");
+        let args: Vec<&[u8]> = tokens.collect();
+        let list = crate::benchmark::setup_bench(&self.engine.pos.fen(), &args);
+
+        let num = list.iter().filter(|s| s.starts_with(b"go ") || s.starts_with(b"eval")).count();
+
+        let mut elapsed = now();
+        let mut nodes: u64 = 0;
+        let mut cnt = 1;
+
+        for cmd in &list {
+            let mut toks = Tokens { rest: cmd };
+            let token = toks.next().unwrap_or(b"");
+
+            if token == b"go" || token == b"eval" {
+                eprintln!("\nPosition: {cnt}/{num} ({})", self.engine.pos.fen());
+                cnt += 1;
+                if token == b"go" {
+                    let limits = self.parse_limits(toks);
+
+                    if limits.perft != 0 {
+                        let n = self.perft(limits.perft);
+                        *nodes_searched.lock().unwrap() = n;
+                    } else {
+                        self.engine.go(limits);
+                        self.engine.wait_for_search_finished();
                     }
-                    let _ = out.flush();
-                    std::process::exit(1);
+
+                    nodes += std::mem::take(&mut *nodes_searched.lock().unwrap());
+                } else {
+                    println!("info string eval is not ported");
                 }
+            } else if token == b"setoption" {
+                self.setoption(toks);
+            } else if token == b"position" {
+                self.position(toks);
+            } else if token == b"ucinewgame" {
+                self.engine.search_clear(); // search_clear may take a while
+                elapsed = now();
             }
         }
-        &self.network.as_ref().unwrap().1
+
+        let elapsed = (now() - elapsed + 1) as u64; // Ensure positivity to avoid a 'divide by zero'
+
+        eprintln!(
+            "\n===========================\nTotal time (ms) : {elapsed}\nNodes searched  : {nodes}\nNodes/second    : {}",
+            1000 * nodes / elapsed
+        );
+
+        self.engine.restore_update_context(saved);
+    }
+
+    /// `searchtrace <file> [events <search>|all <from> <to>] [counts]`.
+    fn search_trace<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
+        let filename = tokens.next().unwrap_or(b"").to_vec();
+        let mut window = SearchTraceWindow::default();
+        let mut valid = true;
+
+        while valid {
+            let Some(token) = tokens.next() else { break };
+            if token == b"counts" {
+                window.counts = true;
+            } else if token == b"events" {
+                let which = tokens.next();
+                let from = tokens.next().and_then(|t| std::str::from_utf8(t).ok()?.parse::<u64>().ok());
+                let to = tokens.next().and_then(|t| std::str::from_utf8(t).ok()?.parse::<u64>().ok());
+                match (which, from, to) {
+                    (Some(w), Some(f), Some(t)) if f < t => {
+                        window.from = f;
+                        window.to = t;
+                        if w == b"all" {
+                            window.search = -1;
+                        } else if w.is_empty() || !w.iter().all(|c| c.is_ascii_digit()) {
+                            valid = false;
+                        } else {
+                            window.search = std::str::from_utf8(w).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+                            if window.search < 1 {
+                                valid = false;
+                            }
+                        }
+                    }
+                    _ => valid = false,
+                }
+            } else {
+                valid = false;
+            }
+        }
+
+        if !valid {
+            self.terminate_on_critical_error(b"Usage: searchtrace <file> [events <search>|all <from> <to>] [counts]");
+        }
+
+        if filename.is_empty() || !self.engine.search_trace(&filename, window) {
+            let mut msg = b"Unable to read file ".to_vec();
+            msg.extend_from_slice(&filename);
+            self.terminate_on_critical_error(&msg);
+        }
     }
 
     /// `dump`: the current position. `dump <file>`: each position of a file
@@ -391,13 +502,13 @@ impl UciEngine {
             self.terminate_on_critical_error(&msg);
         }
 
-        self.verify_network();
-        let network = &self.network.as_ref().unwrap().1;
-        let mut dumper = PositionDumper::new(network);
+        let network = self.engine.verify_network();
+        let chess960 = self.engine.chess960();
+        let mut dumper = PositionDumper::new(&network);
         let mut buf = Vec::with_capacity(8192);
 
         let Some((_, Ok(file))) = file else {
-            dumper.dump(self.pos.fen().as_bytes(), self.chess960, &mut buf);
+            dumper.dump(self.engine.pos.fen().as_bytes(), chess960, &mut buf);
             buf.push(b'\n');
             let _ = io::stdout().lock().write_all(&buf);
             return;
@@ -421,7 +532,7 @@ impl UciEngine {
                 continue;
             }
             buf.clear();
-            dumper.dump(&line, self.chess960, &mut buf);
+            dumper.dump(&line, chess960, &mut buf);
             buf.push(b'\n');
             if out.write_all(&buf).is_err() {
                 break;
@@ -429,21 +540,19 @@ impl UciEngine {
         }
         let _ = out.flush();
     }
-}
 
-impl UciEngine {
     /// `dumpline startpos|fen ... moves ...`: the given line of play.
     /// `dumpline <file>`: each line of a file, one per line, blank lines
     /// skipped, streamed.
     fn dump_line(&mut self, rest: &[u8]) {
         let first = Tokens { rest }.next().unwrap_or(b"");
         let mut buf = Vec::with_capacity(1 << 16);
+        let chess960 = self.engine.chess960();
 
         if first.is_empty() || first == b"startpos" || first == b"fen" {
-            self.verify_network();
-            let network = &self.network.as_ref().unwrap().1;
-            let mut dumper = LineDumper::new(network);
-            dumper.dump(rest, self.chess960, &mut buf);
+            let network = self.engine.verify_network();
+            let mut dumper = LineDumper::new(&network);
+            dumper.dump(rest, chess960, &mut buf);
             let mut out = io::stdout().lock();
             let _ = out.write_all(&buf);
             let _ = out.flush();
@@ -456,9 +565,8 @@ impl UciEngine {
             self.terminate_on_critical_error(&msg);
         };
 
-        self.verify_network();
-        let network = &self.network.as_ref().unwrap().1;
-        let mut dumper = LineDumper::new(network);
+        let network = self.engine.verify_network();
+        let mut dumper = LineDumper::new(&network);
         let stdout = io::stdout();
         let mut out = io::BufWriter::with_capacity(1 << 16, stdout.lock());
         let mut reader = BufReader::new(file);
@@ -481,7 +589,7 @@ impl UciEngine {
                 continue;
             }
             buf.clear();
-            dumper.dump(&line, self.chess960, &mut buf);
+            dumper.dump(&line, chess960, &mut buf);
             if out.write_all(&buf).is_err() {
                 break;
             }
@@ -494,6 +602,138 @@ impl UciEngine {
             msg.extend_from_slice(first);
             self.terminate_on_critical_error(&msg);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The output of a search
+
+/// `win_rate_params()`: the parameters of the win rate model for the
+/// material of a position.
+///
+/// The doubles here reach the output (`score cp` through `to_cp`, `wdl`
+/// through `win_rate_model`). They are computed as C++ does, in the same
+/// order, which x86-64 evaluates in IEEE doubles on both sides (Rust never
+/// fuses operations; the C++ builds have no FMA). On targets that compute
+/// with more precision (x87) or another `exp`, the results stay the same
+/// because no input comes near a rounding boundary: over every material
+/// count and every value, `100 * v / a` stays 3.1e-7 away from a half
+/// integer and `0.5 + 1000 / (1 + exp(...))` 2.5e-6 away from an integer,
+/// far beyond any error of a double computation. The tests
+/// `to_cp_is_far_from_rounding_boundaries` and
+/// `win_rate_is_far_from_rounding_boundaries` check this on each target.
+fn win_rate_params(pos: &Position) -> (f64, f64) {
+    let material = pos.count_both(PAWN)
+        + 3 * pos.count_both(KNIGHT)
+        + 3 * pos.count_both(BISHOP)
+        + 5 * pos.count_both(ROOK)
+        + 9 * pos.count_both(QUEEN);
+    win_rate_params_of(material)
+}
+
+fn win_rate_params_of(material: i32) -> (f64, f64) {
+    // The fitted model only uses data for material counts in [17, 78], and is
+    // anchored at count 58.
+    let m = material.clamp(17, 78) as f64 / 58.0;
+
+    // Return a = p_a(material) and b = p_b(material), see
+    // github.com/official-stockfish/WDL_model
+    const AS: [f64; 4] = [-142.72052667, 372.35176398, -340.71073572, 415.23490212];
+    const BS: [f64; 4] = [5.93832785, 15.61267078, -30.57816876, 69.63866711];
+
+    let a = (((AS[0] * m + AS[1]) * m + AS[2]) * m) + AS[3];
+    let b = (((BS[0] * m + BS[1]) * m + BS[2]) * m) + BS[3];
+
+    (a, b)
+}
+
+/// The win rate model is 1 / (1 + exp((a - eval) / b)), where a =
+/// p_a(material) and b = p_b(material). It fits the LTC fishtest statistics
+/// rather accurately. Returns the win rate in per mille units, rounded to
+/// the nearest integer.
+fn win_rate_model_of(v: Value, a: f64, b: f64) -> i32 {
+    (0.5 + 1000.0 / (1.0 + ((a - v as f64) / b).exp())) as i32
+}
+
+/// `to_cp()`: turns a Value to an integer centipawn number, without
+/// treatment of mate and similar special scores.
+pub fn to_cp(v: Value, pos: &Position) -> i32 {
+    // In general, the score can be defined via the WDL as
+    // (log(1/L - 1) - log(1/W - 1)) / (log(1/L - 1) + log(1/W - 1)).
+    // Based on our win_rate_model, this simply yields v / a.
+    let (a, _) = win_rate_params(pos);
+    to_cp_of(v, a)
+}
+
+/// `int(std::round(100 * int(v) / a))`: `round` goes half away from zero, as
+/// Rust's does.
+fn to_cp_of(v: Value, a: f64) -> i32 {
+    ((100 * v) as f64 / a).round() as i32
+}
+
+/// `wdl()`: the "wdl W D L" of the `info` lines with `UCI_ShowWDL`.
+pub fn wdl(v: Value, pos: &Position) -> String {
+    let (a, b) = win_rate_params(pos);
+    let wdl_w = win_rate_model_of(v, a, b);
+    let wdl_l = win_rate_model_of(-v, a, b);
+    let wdl_d = 1000 - wdl_w - wdl_l;
+    format!("{wdl_w} {wdl_d} {wdl_l}")
+}
+
+/// `format_score()`.
+pub fn format_score(s: &Score) -> String {
+    const TB_CP: i32 = 20000;
+    match *s {
+        Score::Mate { plies } => {
+            let m = (if plies > 0 { plies + 1 } else { plies }) / 2;
+            format!("mate {m}")
+        }
+        Score::Tablebase { plies, win } => format!("cp {}", (if win { TB_CP } else { -TB_CP }) - plies),
+        Score::InternalUnits { value } => format!("cp {value}"),
+    }
+}
+
+pub fn on_update_no_moves(info: &InfoShort) {
+    println!("info depth {} score {}", info.depth, format_score(&info.score));
+}
+
+pub fn on_update_full(info: &InfoFull) {
+    let mut s = format!(
+        "info depth {} seldepth {} multipv {} score {}",
+        info.depth,
+        info.sel_depth,
+        info.multi_pv,
+        format_score(&info.score)
+    );
+
+    if !info.bound.is_empty() {
+        s.push(' ');
+        s += info.bound;
+    }
+
+    // The wdl is computed only when UCI_ShowWDL is set
+    if !info.wdl.is_empty() {
+        s += " wdl ";
+        s += info.wdl;
+    }
+
+    s += &format!(
+        " nodes {} nps {} hashfull {} tbhits {} time {} pv {}",
+        info.nodes, info.nps, info.hashfull, info.tb_hits, info.time_ms, info.pv
+    );
+
+    println!("{s}");
+}
+
+pub fn on_iter(info: &InfoIteration) {
+    println!("info depth {} currmove {} currmovenumber {}", info.depth, info.currmove, info.currmovenumber);
+}
+
+pub fn on_bestmove(bestmove: &str, ponder: &str) {
+    if ponder.is_empty() {
+        println!("bestmove {bestmove}");
+    } else {
+        println!("bestmove {bestmove} ponder {ponder}");
     }
 }
 
@@ -511,7 +751,7 @@ fn os_bytes(s: &std::ffi::OsStr) -> std::borrow::Cow<'_, [u8]> {
 }
 
 /// A file name given as bytes, unchanged on Unix.
-fn path_from_bytes(b: &[u8]) -> std::path::PathBuf {
+pub fn path_from_bytes(b: &[u8]) -> std::path::PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -535,6 +775,46 @@ mod tests {
         assert_eq!(parse_int_prefix(b"-2"), Some((-2, &b""[..])));
         assert_eq!(parse_int_prefix(b"x1"), None);
         assert_eq!(parse_int_prefix(b"99999999999"), None);
+    }
+
+    /// Every value `to_cp` can get (not decisive) for every material count:
+    /// the quotient is far enough from a half integer that this target's
+    /// doubles round it as IEEE doubles on x86-64 do (see win_rate_params).
+    #[test]
+    fn to_cp_is_far_from_rounding_boundaries() {
+        let mut min = f64::MAX;
+        for material in 17..=78 {
+            let (a, _) = win_rate_params_of(material);
+            for v in -(VALUE_TB_WIN_IN_MAX_PLY - 1)..VALUE_TB_WIN_IN_MAX_PLY {
+                let q = (100 * v) as f64 / a;
+                let d = (q - (q.floor() + 0.5)).abs();
+                min = min.min(d);
+            }
+        }
+        assert!(min > 3.0e-7, "{min}");
+        // (material, internal value, cp) as the C++ binary prints them, from
+        // the golden file of the trace sample
+        for (material, v, cp) in
+            [(78, -35, -12), (70, -150, -51), (58, 853, 280), (40, -2313, -745), (17, -3100, -902), (10, 2613, 760)]
+        {
+            let (a, _) = win_rate_params_of(material);
+            assert_eq!(to_cp_of(v, a), cp, "material {material}, value {v}");
+        }
+    }
+
+    /// The same for the win rate of `wdl`, over every value a score can
+    /// take.
+    #[test]
+    fn win_rate_is_far_from_rounding_boundaries() {
+        let mut min = f64::MAX;
+        for material in 17..=78 {
+            let (a, b) = win_rate_params_of(material);
+            for v in -VALUE_INFINITE..=VALUE_INFINITE {
+                let x = 0.5 + 1000.0 / (1.0 + ((a - v as f64) / b).exp());
+                min = min.min((x - x.round()).abs());
+            }
+        }
+        assert!(min > 2.0e-6, "{min}");
     }
 
     #[test]

@@ -1,0 +1,5 @@
+# As extra.sessions, for Chess960 (UCI_Chess960 set)
+position fen bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w HFhf - 0 1 ; go depth 12
+position fen nqbnrkrb/pppppppp/8/8/8/8/PPPPPPPP/NQBNRKRB w GEge - 0 1 ; go depth 10 searchmoves g1f3 c2c4
+position fen 1r2k2r/8/8/8/8/8/8/R3K2R w HAhb - 97 140 ; go depth 14
+position fen 1r2k2r/8/8/8/8/8/8/R3K2R w HAhb - 99 140 ; go nodes 50000

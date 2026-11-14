@@ -31,6 +31,66 @@ pub const CASTLING_RIGHT_NB: usize = 16;
 
 pub type Value = i32;
 pub const VALUE_ZERO: Value = 0;
+pub const VALUE_DRAW: Value = 0;
+pub const VALUE_NONE: Value = 32002;
+pub const VALUE_INFINITE: Value = 32001;
+
+pub const VALUE_MATE: Value = 32000;
+pub const VALUE_MATE_IN_MAX_PLY: Value = VALUE_MATE - MAX_PLY as Value;
+pub const VALUE_MATED_IN_MAX_PLY: Value = -VALUE_MATE_IN_MAX_PLY;
+
+pub const VALUE_TB: Value = VALUE_MATE_IN_MAX_PLY - 1;
+pub const VALUE_TB_WIN_IN_MAX_PLY: Value = VALUE_TB - MAX_PLY as Value;
+pub const VALUE_TB_LOSS_IN_MAX_PLY: Value = -VALUE_TB_WIN_IN_MAX_PLY;
+
+#[inline(always)]
+pub const fn is_valid(value: Value) -> bool {
+    value != VALUE_NONE
+}
+
+#[inline(always)]
+pub const fn is_win(value: Value) -> bool {
+    debug_assert!(is_valid(value));
+    value >= VALUE_TB_WIN_IN_MAX_PLY
+}
+
+#[inline(always)]
+pub const fn is_loss(value: Value) -> bool {
+    debug_assert!(is_valid(value));
+    value <= VALUE_TB_LOSS_IN_MAX_PLY
+}
+
+#[inline(always)]
+pub const fn is_decisive(value: Value) -> bool {
+    is_win(value) || is_loss(value)
+}
+
+#[inline(always)]
+pub const fn is_mate(value: Value) -> bool {
+    debug_assert!(is_valid(value));
+    value >= VALUE_MATE_IN_MAX_PLY
+}
+
+#[inline(always)]
+pub const fn is_mated(value: Value) -> bool {
+    debug_assert!(is_valid(value));
+    value <= VALUE_MATED_IN_MAX_PLY
+}
+
+#[inline(always)]
+pub const fn is_mate_or_mated(value: Value) -> bool {
+    is_mate(value) || is_mated(value)
+}
+
+#[inline(always)]
+pub const fn mate_in(ply: i32) -> Value {
+    VALUE_MATE - ply
+}
+
+#[inline(always)]
+pub const fn mated_in(ply: i32) -> Value {
+    -VALUE_MATE + ply
+}
 
 pub const PAWN_VALUE: Value = 208;
 pub const KNIGHT_VALUE: Value = 781;
@@ -72,7 +132,7 @@ pub const PIECE_VALUE: [Value; PIECE_NB] = [
 ];
 
 pub type Depth = i32;
-/// The depth of the quiescence search (the TT constants come with search).
+/// The depth of the quiescence search; the TT constants are in `tt.rs`.
 pub const DEPTH_QS: Depth = 0;
 
 pub type Square = u8;

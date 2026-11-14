@@ -3,9 +3,15 @@
 //!
 //! Module names follow the C++ files they port.
 
+// The trace! macro, used by search.rs
+#[macro_use]
+pub mod searchtrace;
+
 pub mod attacks;
+pub mod benchmark;
 pub mod bitboard;
 pub mod dump;
+pub mod engine;
 pub mod evaluate;
 pub mod history;
 pub mod misc;
@@ -14,5 +20,11 @@ pub mod movepick;
 pub mod nnue;
 pub mod perft;
 pub mod position;
+pub mod score;
+pub mod search;
+pub mod thread;
+pub mod timeman;
+pub mod tt;
 pub mod types;
 pub mod uci;
+pub mod ucioption;

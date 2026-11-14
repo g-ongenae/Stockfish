@@ -5,12 +5,6 @@ use crate::nnue::{AccumulatorCaches, AccumulatorStack, Network};
 use crate::position::Position;
 use crate::types::*;
 
-pub const VALUE_MATE: Value = 32000;
-pub const VALUE_MATE_IN_MAX_PLY: Value = VALUE_MATE - MAX_PLY as Value;
-pub const VALUE_TB: Value = VALUE_MATE_IN_MAX_PLY - 1;
-pub const VALUE_TB_WIN_IN_MAX_PLY: Value = VALUE_TB - MAX_PLY as Value;
-pub const VALUE_TB_LOSS_IN_MAX_PLY: Value = -VALUE_TB_WIN_IN_MAX_PLY;
-
 fn simple_eval(pos: &Position) -> i32 {
     let c = pos.side_to_move();
     PAWN_VALUE * (pos.count(c, PAWN) - pos.count(not_color(c), PAWN)) + pos.non_pawn_material(c)

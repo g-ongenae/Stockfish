@@ -66,7 +66,7 @@ jobs:
   native:
     name: x86-64
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -104,6 +104,24 @@ jobs:
             exit 0
           fi
           EXE=$PWD/target/release/stockfish ../.github/ci/verify-sample.sh lines --fields "$DUMPLINE_FIELDS"
+      # The search: its UCI output and its event and state digests on the
+      # sample of the search trace (README.md, "The search"), the deepest
+      # searches of the full corpus, and the bench signature
+      - name: Search trace sample, UCI output
+        run: EXE=$PWD/target/release/stockfish ../.github/ci/verify-sample.sh trace-uci
+      - name: Search trace sample, events and state
+        run: EXE=$PWD/target/release/stockfish ../.github/ci/verify-sample.sh trace
+      - name: Deepest searches of the full corpus
+        run: ./search_check.sh deep target/release/stockfish
+      - name: Bench signature
+        run: ./search_check.sh bench target/release/stockfish
+      # Overflow and bounds checks, and the debug assertions of C++, on the
+      # whole sample of the trace
+      - name: Search trace sample, debug build
+        run: |
+          cargo build --locked
+          EXE=$PWD/target/debug/stockfish ../.github/ci/verify-sample.sh trace
+
       # The move picker beyond what `dump` sees (TT moves, ProbCut,
       # skip_quiet_moves, plies above 0, non-zero histories, legal() on every
       # move value, the history update operator): a C++ driver built against
@@ -124,6 +142,25 @@ jobs:
           EXE=target/release/examples/movepick_check ./movepick_check.sh sample > movepick-rust.txt
           wc -l movepick-cpp.txt
           cmp movepick-cpp.txt movepick-rust.txt
+      # The transposition table beyond the 2 MB of the trace: probes,
+      # writes, replacement and ageing at several sizes, the C++ table
+      # against the port's (README.md, "The transposition table")
+      - name: Transposition table, C++ against Rust
+        run: |
+          ARCH=x86-64-sse41-popcnt bench/build_tt_check.sh
+          cargo build --release --locked --example tt_check
+          ./search_check.sh tt target/cpp/tt_check > tt-cpp.txt
+          ./search_check.sh tt target/release/examples/tt_check > tt-rust.txt
+          wc -l tt-cpp.txt
+          cmp tt-cpp.txt tt-rust.txt
+          cmp tt-cpp.txt tt_check.expected
+      # What the corpus of the trace does not reach, against the C++ engine
+      # built above: mates, stalemates, the 50-move rule close to 100,
+      # searchmoves, go mate, a search of 11M nodes, the bench positions to
+      # depth 18 and 20; and the hash sizes, UCI_ShowWDL and MultiPV on part
+      # of the sample (README.md, "What the gates do not see")
+      - name: Search, direct comparisons with the C++ engine
+        run: REF=$PWD/../src/stockfish ./search_check.sh compare target/release/stockfish
       - name: Move picker, movepick_check.expected is the C++ output
         run: EXE=target/cpp/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
       - name: Move picker with magic32
@@ -149,7 +186,7 @@ jobs:
   emulated:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -293,6 +330,23 @@ jobs:
           cargo build --release --locked --example movepick_check
           EXE=$PWD/target/$TARGET/release/examples/movepick_check RUN_PREFIX="$RUNNER" ./movepick_check.sh subset \
             | cmp - movepick_check.expected
+      # The search under emulation: the whole sample of the search trace
+      # (UCI output, then events and state; 2 to 7 minutes per step on these
+      # targets), the deepest searches of the full corpus, the transposition
+      # table driver against the C++ output kept in tt_check.expected, and the
+      # bench signature
+      - name: Search trace sample, UCI output (emulated)
+        run: RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh trace-uci
+      - name: Search trace sample, events and state (emulated)
+        run: RUN_PREFIX="$RUNNER" ../.github/ci/verify-sample.sh trace
+      - name: Deepest searches of the full corpus (emulated)
+        run: RUN_PREFIX="$RUNNER" ./search_check.sh deep $EXE
+      - name: Transposition table against the C++ driver (emulated)
+        run: |
+          cargo build --release --locked --example tt_check
+          RUN_PREFIX="$RUNNER" ./search_check.sh tt $PWD/target/$TARGET/release/examples/tt_check | cmp - tt_check.expected
+      - name: Bench signature (emulated)
+        run: RUN_PREFIX="$RUNNER" ./search_check.sh bench $EXE
       - name: Perft (emulated), depth ${{ matrix.perft_depth }} at most
         run: |
           printf '#!/bin/sh\nexec %s %s "$@"\n' "$RUNNER" "$EXE" > emulated
