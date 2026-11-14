@@ -23,6 +23,10 @@ magic32 = []
 # Do the doubles of time management in software on every target (src/fp.rs),
 # as the i586 targets do, to test that path.
 softfloat = []
+# Keep the node counters of the search threads in two 32-bit halves on every
+# target, as the 32-bit targets do (src/misc.rs, RelaxedCounter), to test
+# that path natively.
+counter32 = []
 
 [profile.release]
 opt-level = 3

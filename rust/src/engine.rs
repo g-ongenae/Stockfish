@@ -12,7 +12,7 @@ use crate::nnue::Network;
 use crate::position::{Position, PositionSetError};
 use crate::search::*;
 use crate::searchtrace::{self, json_string, parse_session, trim, SearchTraceWindow, SearchTracer};
-use crate::thread::{SharedFlags, ThreadPool};
+use crate::thread::ThreadPool;
 use crate::timeman::now;
 use crate::tt::TranspositionTable;
 use crate::types::*;
@@ -27,7 +27,6 @@ pub struct Engine {
     pub options: OptionsMap,
     pub threads: ThreadPool,
     tt: Arc<TranspositionTable>,
-    shared_histories: Arc<SharedHistories>,
     /// The network and the `EvalFile` value it was read for. Read on first
     /// use rather than embedded (see README.md, "The network").
     network: Option<(Vec<u8>, Arc<Network>)>,
@@ -83,25 +82,17 @@ impl Engine {
         options.add(UciOption::spin("SyzygyProbeLimit", 7, 0, 7));
         options.add(UciOption::string("EvalFile", EVAL_FILE_DEFAULT_NAME));
 
-        let update_context = Arc::new(default_update_context());
-        let tt = Arc::new(TranspositionTable::new(16));
-        // SharedHistories(next_power_of_two(1 thread))
-        let shared_histories = Arc::new(SharedHistories::new(1));
-        let flags = Arc::new(SharedFlags::default());
-        let manager = Box::new(SearchManager::new(update_context.clone()));
-        let worker = Box::new(Worker::new(shared_histories.clone(), Some(manager), 0, 0, 1, tt.clone(), flags.clone()));
-
         let mut e = Engine {
             pos,
             options,
-            threads: ThreadPool::new(worker, flags),
-            tt,
-            shared_histories,
+            threads: ThreadPool::new(),
+            // (made by set_tt_size(), from resize_threads(), as in C++)
+            tt: Arc::new(TranspositionTable::new(0)),
             network: None,
             network_verified: false,
-            update_context,
+            update_context: Arc::new(default_update_context()),
         };
-        e.threads.clear();
+        e.resize_threads();
         e
     }
 
@@ -114,10 +105,8 @@ impl Engine {
         self.wait_for_search_finished();
         match self.options.setoption(name, value) {
             Some("Threads") => {
-                if self.options.int("Threads") != 1 {
-                    println!("info string This port searches with one thread for now");
-                }
                 self.resize_threads();
+                println!("info string {}", self.thread_allocation_information_as_string());
             }
             Some("Hash") => self.set_tt_size(self.options.int("Hash") as usize),
             Some("Clear Hash") => self.search_clear(),
@@ -139,14 +128,23 @@ impl Engine {
         }
     }
 
-    /// `resize_threads()`: C++ recreates its threads, their shared histories
-    /// and their workers, cleared, then resizes the hash. With one thread
-    /// (the only count the port supports for now) that is a clear of the
-    /// worker and of the main manager, and the resize.
-    fn resize_threads(&mut self) {
+    /// `resize_threads()`: recreates the threads, their shared histories
+    /// and their workers, cleared, then reallocates the hash.
+    pub fn resize_threads(&mut self) {
         self.wait_for_search_finished();
-        self.threads.clear();
+        let network = self.network.as_ref().map(|(_, n)| n.clone());
+        let requested = self.options.int("Threads") as usize;
+        self.threads.set(requested, &self.tt, network, self.update_context.clone());
+
+        // Reallocate the hash with the new threadpool size
         self.set_tt_size(self.options.int("Hash") as usize);
+    }
+
+    /// `thread_allocation_information_as_string()`: one NUMA node, no
+    /// binding (see README.md, "Threads").
+    pub fn thread_allocation_information_as_string(&self) -> String {
+        let n = self.threads.size();
+        format!("Using {n} {}", if n > 1 { "threads" } else { "thread" })
     }
 
     /// `set_tt_size()`: a new table of `mb` MiB, cleared.
@@ -154,9 +152,12 @@ impl Engine {
         self.wait_for_search_finished();
         // C++ frees the old table before allocating the new one
         self.tt = Arc::new(TranspositionTable::new(0));
-        self.threads.main_worker().tt = self.tt.clone();
+        let tt = self.tt.clone();
+        self.threads.for_each_worker(|w| w.tt = tt.clone());
+        // Allocated zeroed, which is what C++'s clear() then leaves
         self.tt = Arc::new(TranspositionTable::new(mb));
-        self.threads.main_worker().tt = self.tt.clone();
+        let tt = self.tt.clone();
+        self.threads.for_each_worker(|w| w.tt = tt.clone());
     }
 
     pub fn wait_for_search_finished(&mut self) {
@@ -174,7 +175,7 @@ impl Engine {
     /// `search_clear()`: what `ucinewgame` does.
     pub fn search_clear(&mut self) {
         self.wait_for_search_finished();
-        self.tt.clear();
+        self.tt.clear_with(&self.threads);
         self.threads.clear();
     }
 
@@ -221,9 +222,7 @@ impl Engine {
 
     /// Replaces the callbacks of the search output.
     pub fn set_update_context(&mut self, ctx: UpdateContext) {
-        self.update_context = Arc::new(ctx);
-        let ctx = self.update_context.clone();
-        self.threads.main_worker().manager.as_deref_mut().unwrap().updates = ctx;
+        self.set_update_context_arc(Arc::new(ctx));
     }
 
     /// The file of the `EvalFile` option, the default name if empty.
@@ -261,7 +260,7 @@ impl Engine {
         }
         if let Some((_, net)) = &self.network {
             let net = net.clone();
-            self.threads.main_worker().set_network(net);
+            self.threads.for_each_worker(|w| w.set_network(net.clone()));
             self.threads.clear();
         }
     }
@@ -323,7 +322,7 @@ impl Engine {
     }
 
     pub fn shared_histories(&self) -> &SharedHistories {
-        &self.shared_histories
+        self.threads.shared_histories()
     }
 
     // -----------------------------------------------------------------------
@@ -506,7 +505,7 @@ impl Engine {
                     );
                 }
                 let tt = self.tt.clone();
-                let state = searchtrace::state_digests(self.threads.main_worker(), &tt, tracer.events() > 0);
+                let state = searchtrace::state_digests(&self.threads.main_worker(), &tt, tracer.events() > 0);
                 r += &format!(
                     "],\"state\":{state},\"events\":{},\"digest\":\"{:016X}\",\"checkpoints\":[",
                     tracer.events(),

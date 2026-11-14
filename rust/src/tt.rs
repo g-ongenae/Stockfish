@@ -15,7 +15,9 @@
 //! fields, not over memory, so it does not depend on the byte order.
 
 use std::sync::atomic::{AtomicI16, AtomicU16, AtomicU32, AtomicU8, Ordering::Relaxed};
+use std::sync::Arc;
 
+use crate::thread::ThreadPool;
 use crate::types::*;
 
 pub const DEPTH_UNSEARCHED: Depth = -2;
@@ -159,11 +161,37 @@ impl TranspositionTable {
         TranspositionTable { table: table.into_boxed_slice(), generation8: AtomicU8::new(0) }
     }
 
-    /// `clear()`: every entry to zero and the generation to 0. C++ shares the
-    /// work between the search threads; with one thread it is one loop.
+    /// `clear()`: every entry to zero and the generation to 0, by the
+    /// threads of the pool, each zeroing its part of the table, as in C++
+    /// (one NUMA node: thread i clears part i).
+    pub fn clear_with(self: &Arc<Self>, threads: &ThreadPool) {
+        self.generation8.store(0, Relaxed);
+        let thread_count = threads.num_threads();
+
+        for i in 0..thread_count {
+            let tt = self.clone();
+            threads.run_on_thread(i, move |_| {
+                // Each thread will zero its part of the hash table
+                let stride = tt.table.len() / thread_count;
+                let start = stride * i;
+                let len = if i + 1 != thread_count { stride } else { tt.table.len() - start };
+                tt.zero(start, len);
+            });
+        }
+
+        for i in 0..thread_count {
+            threads.wait_on_thread(i);
+        }
+    }
+
+    /// `clear()` on the calling thread alone (the drivers have no pool).
     pub fn clear(&self) {
         self.generation8.store(0, Relaxed);
-        for c in self.table.iter() {
+        self.zero(0, self.table.len());
+    }
+
+    fn zero(&self, start: usize, len: usize) {
+        for c in &self.table[start..start + len] {
             c.set_keys(0);
             for e in &c.entry {
                 e.depth8.store(0, Relaxed);

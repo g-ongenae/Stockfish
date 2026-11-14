@@ -205,7 +205,13 @@ impl UciEngine {
             b"ucinewgame" => self.engine.search_clear(),
             b"setoption" => self.setoption(tokens),
             b"position" => self.position(tokens),
-            b"go" => self.go(tokens),
+            b"go" => {
+                // send info strings after the go command is sent for old
+                // GUIs and python-chess (C++ also sends the NUMA
+                // configuration, "Available processors: ...", not ported)
+                println!("info string {}", self.engine.thread_allocation_information_as_string());
+                self.go(tokens)
+            }
             b"bench" => self.bench(tokens),
             b"dump" => self.dump(tokens.next()),
             b"dumpline" => {

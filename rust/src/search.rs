@@ -47,7 +47,7 @@ use crate::nnue::{AccumulatorCaches, AccumulatorStack, Network};
 use crate::position::Position;
 use crate::score::Score;
 use crate::searchtrace::SearchTracer;
-use crate::thread::SharedFlags;
+use crate::thread::{get_best_thread, Helpers, SharedFlags, ThreadCounters};
 use crate::timeman::{TimeManagement, TimePoint, TmOptions};
 use crate::tt::*;
 use crate::types::*;
@@ -521,12 +521,10 @@ pub struct Worker {
 
     pv_idx: usize,
     pv_last: usize,
-    // C++ keeps these three in RelaxedAtomic<u64> for the other threads to
-    // read; with one thread they are plain counters (32-bit PowerPC has no
-    // 64-bit atomics: the thread layer will have to choose).
-    pub nodes: u64,
-    pub tb_hits: u64,
-    pub best_move_changes: u64,
+    /// `nodes`, `tbHits` and `bestMoveChanges`, which C++ keeps in the
+    /// worker as `RelaxedAtomic<u64>`: shared with the main thread, which
+    /// reads them during the search (`SharedFlags::counters`)
+    pub counters: Arc<ThreadCounters>,
     sel_depth: i32,
     pub nmp_min_ply: i32,
 
@@ -545,6 +543,9 @@ pub struct Worker {
 
     /// The main thread has a SearchManager, the others have none
     pub manager: Option<Box<SearchManager>>,
+    /// The threads the main worker starts and waits for (none for the
+    /// others): see thread.rs
+    pub helpers: Helpers,
 
     pub tb_config: TbConfig,
 
@@ -617,9 +618,7 @@ impl Worker {
             search_options: SearchOptions::default(),
             pv_idx: 0,
             pv_last: 0,
-            nodes: 0,
-            tb_hits: 0,
-            best_move_changes: 0,
+            counters: flags.counters.get(thread_id).cloned().unwrap_or_default(),
             sel_depth: 0,
             nmp_min_ply: 0,
             optimism: [0; COLOR_NB],
@@ -632,6 +631,7 @@ impl Worker {
             numa_thread_idx: numa_thread_id,
             numa_total: numa_total_threads,
             manager,
+            helpers: Helpers::default(),
             tb_config: TbConfig::default(),
             tt,
             network: None,
@@ -648,6 +648,12 @@ impl Worker {
 
     pub fn is_mainthread(&self) -> bool {
         self.thread_idx == 0
+    }
+
+    /// `nodes`, this worker's count, read by this worker.
+    #[inline(always)]
+    pub fn nodes(&self) -> u64 {
+        self.counters.nodes.get_own()
     }
 
     /// Gives the worker the network to evaluate with (C++ reaches it through
@@ -744,8 +750,8 @@ impl Worker {
             return;
         }
 
-        // Main thread starts non-main threads, and begins own search (one
-        // thread for now: there are none to start)
+        // Main thread starts non-main threads, and begins own search
+        self.helpers.start_searching();
         let mut uci_pv_sent = self.iterative_deepening::<TRACE>();
 
         // When we reach the maximum depth, we can arrive here without a raise
@@ -762,53 +768,71 @@ impl Worker {
         // "ponderhit" just reset threads.ponder).
         self.flags.stop.store(true, Relaxed);
 
-        // Wait until all threads have finished (there are none)
+        // Wait until all threads have finished
+        self.helpers.wait_for_search_finished();
 
         // When playing in 'nodes as time' mode, subtract the searched nodes
         // from the available ones before exiting.
         if self.limits.npmsec != 0 {
-            let n = (self.nodes as i64).wrapping_sub(self.limits.inc[us as usize]);
+            let n = (self.flags.nodes_searched() as i64).wrapping_sub(self.limits.inc[us as usize]);
             self.main_manager().tm.advance_nodes_time(n);
         }
 
-        // With one thread, get_best_thread() is this one, as is bestThread
-        // when there is a depth limit or a skill level.
         let skill = Skill::new(
             self.search_options.skill_level,
             if self.search_options.limit_strength { self.search_options.uci_elo } else { 0 },
         );
-        let _ = self.limits.depth == 0 && !skill.enabled();
 
-        let (score0, avg0) = (self.root_moves[0].score, self.root_moves[0].average_score);
-        let mm = self.main_manager();
-        mm.best_previous_score = score0;
-        mm.best_previous_average_score = avg0;
+        // The workers of the other threads, idle now; bestThread is this one
+        // (index 0) or one of them (index i is helpers[i - 1])
+        let helpers = self.helpers.clone();
+        let mut others = helpers.workers();
 
-        if self.root_moves[0].pv.len() == 1 {
-            let tt = self.tt.clone();
-            if self.root_moves[0].extract_ponder_from_tt(&tt, &mut self.root_pos) {
-                uci_pv_sent = false;
-            }
+        let best_thread = if self.limits.depth == 0 && !skill.enabled() {
+            let mut all: Vec<&RootMoves> = Vec::with_capacity(1 + others.len());
+            all.push(&self.root_moves);
+            all.extend(others.iter().map(|w| &w.root_moves));
+            get_best_thread(&all)
+        } else {
+            0
+        };
+
+        let tt = self.tt.clone();
+        let nodes = self.flags.nodes_searched();
+        let tb_hits = self.flags.tb_hits();
+        let mut mm = self.manager.take().unwrap();
+        let best: &mut Worker = if best_thread == 0 { self } else { &mut others[best_thread - 1] };
+
+        mm.best_previous_score = best.root_moves[0].score;
+        mm.best_previous_average_score = best.root_moves[0].average_score;
+
+        // C++ passes the root position of the main worker; every worker has
+        // the same one (set from the same position by start_thinking()), and
+        // it comes back unchanged
+        if best.root_moves[0].pv.len() == 1 && best.root_moves[0].extract_ponder_from_tt(&tt, &mut best.root_pos) {
+            uci_pv_sent = false;
         }
 
         // Send PV info if it has changed since last output in
         // iterative_deepening()
-        if !uci_pv_sent {
-            self.output_pv(self.root_depth);
+        if !uci_pv_sent || best_thread != 0 {
+            let depth = best.root_depth;
+            best.output_pv_of(&mm, nodes, tb_hits, depth);
         }
 
         // In rare cases, output_pv() may change the ponder move through
         // syzygy_extend_pv()
-        let chess960 = self.root_pos.is_chess960();
-        let ponder = if self.root_moves[0].pv.len() > 1 {
-            uci::move_to_string(self.root_moves[0].pv[1], chess960)
+        let chess960 = best.root_pos.is_chess960();
+        let ponder = if best.root_moves[0].pv.len() > 1 {
+            uci::move_to_string(best.root_moves[0].pv[1], chess960)
         } else {
             String::new()
         };
 
-        let bestmove = uci::move_to_string(self.root_moves[0].pv[0], chess960);
-        let updates = self.main_manager().updates.clone();
-        (updates.on_bestmove)(&bestmove, &ponder);
+        let bestmove = uci::move_to_string(best.root_moves[0].pv[0], chess960);
+        drop(others);
+        (mm.updates.on_bestmove)(&bestmove, &ponder);
+        self.manager = Some(mm);
     }
 
     /// Main iterative deepening loop. It calls search() repeatedly with
@@ -1003,7 +1027,7 @@ impl Worker {
                     if main_thread
                         && multi_pv == 1
                         && (best_value <= alpha || best_value >= beta)
-                        && self.nodes > NODES_LIMIT_OUTPUT
+                        && self.nodes() > NODES_LIMIT_OUTPUT
                     {
                         self.root_pos = std::mem::take(&mut pos);
                         self.output_pv(self.root_depth);
@@ -1046,7 +1070,7 @@ impl Worker {
                 // Sort the PV lines searched so far and update the GUI
                 stable_sort(&mut self.root_moves[pv_first..pv_idx + 1]);
 
-                if main_thread && !stopped && (pv_idx + 1 == multi_pv || self.nodes > NODES_LIMIT_OUTPUT) {
+                if main_thread && !stopped && (pv_idx + 1 == multi_pv || self.nodes() > NODES_LIMIT_OUTPUT) {
                     self.root_pos = std::mem::take(&mut pos);
                     self.output_pv(self.root_depth);
                     pos = std::mem::take(&mut self.root_pos);
@@ -1119,7 +1143,7 @@ impl Worker {
             if TRACE {
                 let stopped = self.flags.stop.load(Relaxed);
                 if let Some(t) = self.tracer.as_deref_mut() {
-                    t.iteration_end(&self.root_moves[0], self.nodes, self.root_depth, stopped);
+                    t.iteration_end(&self.root_moves[0], self.counters.nodes.get_own(), self.root_depth, stopped);
                 }
             }
 
@@ -1140,7 +1164,7 @@ impl Worker {
                 && !self.flags.stop.load(Relaxed)
                 && !self.manager.as_deref().unwrap().stop_on_ponderhit
             {
-                let nodes_effort: u64 = self.root_moves[0].effort.wrapping_mul(100000) / 1u64.max(self.nodes);
+                let nodes_effort: u64 = self.root_moves[0].effort.wrapping_mul(100000) / 1u64.max(self.nodes());
 
                 let mm = self.manager.as_deref_mut().unwrap();
                 let by_average = F64::from_i32(mm.best_previous_average_score - best_value);
@@ -1155,13 +1179,15 @@ impl Worker {
 
                 let reduction = (1.468 + F64(mm.previous_time_reduction)) / (2.284 * time_reduction);
 
-                // Age out and update PV variability metric (of every thread:
-                // this one only for now)
+                // Age out and update PV variability metric
                 tot_best_move_changes = tot_best_move_changes / 2.0;
-                tot_best_move_changes = tot_best_move_changes + F64::from_i64(self.best_move_changes as i64);
-                self.best_move_changes = 0;
+                for c in self.flags.counters.iter() {
+                    let changes = c.best_move_changes.load(Relaxed) as u64;
+                    tot_best_move_changes = tot_best_move_changes + F64::from_u64(changes);
+                    c.best_move_changes.store(0, Relaxed);
+                }
 
-                let threads_size = 1.0;
+                let threads_size = F64::from_u64(self.flags.size() as u64);
                 let best_move_instability = 1.077 + 2.229 * tot_best_move_changes / threads_size;
 
                 let effort = interpolate_i64(nodes_effort as i64, 75800, 104510, 0.969, 0.714);
@@ -1177,7 +1203,8 @@ impl Worker {
                     total_time = fp::min(500.0 * F64::from_i64(self.limits.npmsec.max(1)), total_time);
                 }
 
-                let elapsed_time = F64::from_i64(mm.tm.elapsed(self.nodes));
+                let flags = &self.flags;
+                let elapsed_time = F64::from_i64(mm.tm.elapsed(|| flags.nodes_searched()));
 
                 // Stop the search if we have exceeded totalTime or maximum
                 // time, or if we know that there are no better moves in the
@@ -1295,7 +1322,7 @@ impl Worker {
     /// the moves outside the tree).
     #[inline(always)]
     fn do_move(&mut self, pos: &mut Position, m: Move, gives_check: bool, capture: bool, ss: usize) {
-        self.nodes += 1;
+        self.counters.nodes.increment();
 
         let dirties = self.accumulator_stack.push(pos);
         pos.do_move_dirties(m, gives_check, dirties);
@@ -1683,7 +1710,7 @@ impl Worker {
     ) -> Value {
         if TRACE {
             if let Some(t) = self.tracer.as_deref_mut() {
-                t.enter_search(pos, &self.stack[ss], alpha, beta, depth, NT, cut_node, self.nodes);
+                t.enter_search(pos, &self.stack[ss], alpha, beta, depth, NT, cut_node, self.counters.nodes.get_own());
             }
             let value = self.search_node::<NT, TRACE>(pos, ss, alpha, beta, depth, cut_node);
             trace!(self, TRACE, leave(value));
@@ -1704,7 +1731,7 @@ impl Worker {
     ) -> Value {
         if TRACE {
             if let Some(t) = self.tracer.as_deref_mut() {
-                t.enter_qsearch(pos, &self.stack[ss], alpha, beta, NT == PV, self.nodes);
+                t.enter_qsearch(pos, &self.stack[ss], alpha, beta, NT == PV, self.counters.nodes.get_own());
             }
             let value = self.qsearch_node::<NT, TRACE>(pos, ss, alpha, beta);
             trace!(self, TRACE, leave(value));
@@ -1744,7 +1771,7 @@ impl Worker {
 
         // Check if we have an upcoming move that draws by repetition
         if !root_node && alpha < VALUE_DRAW && pos.upcoming_repetition(self.stack[ss].ply) {
-            alpha = value_draw(self.nodes);
+            alpha = value_draw(self.nodes());
             trace!(self, TRACE, repetition_draw(alpha));
             if alpha >= beta {
                 return alpha;
@@ -1810,7 +1837,7 @@ impl Worker {
                     };
                     trace!(self, TRACE, immediate(reason));
                 }
-                return if ply >= MAX_PLY as i32 && !in_check { self.evaluate(pos) } else { value_draw(self.nodes) };
+                return if ply >= MAX_PLY as i32 && !in_check { self.evaluate(pos) } else { value_draw(self.nodes()) };
             }
 
             // Step 3. Mate distance pruning. Even if we mate at the next move
@@ -2265,7 +2292,7 @@ impl Worker {
             move_count += 1;
             self.stack[ss].move_count = move_count;
 
-            if root_node && self.is_mainthread() && self.nodes > NODES_LIMIT_OUTPUT {
+            if root_node && self.is_mainthread() && self.nodes() > NODES_LIMIT_OUTPUT {
                 let s = uci::move_to_string(mv, pos.is_chess960());
                 let info = InfoIteration { depth, currmove: &s, currmovenumber: move_count as usize + self.pv_idx };
                 (self.main_manager().updates.on_iter)(&info);
@@ -2481,7 +2508,7 @@ impl Worker {
                 }
             }
 
-            let node_count = if root_node { self.nodes } else { 0 };
+            let node_count = if root_node { self.nodes() } else { 0 };
 
             // Step 17. Make the move
             self.do_move(pos, mv, gives_check, capture, ss);
@@ -2660,7 +2687,7 @@ impl Worker {
             // just exceeds alpha (but not beta).
             let inc = (value == best_value
                 && ply + 2 >= self.root_depth
-                && (self.nodes as i32 & 14) == 0
+                && (self.nodes() as i32 & 14) == 0
                 && !is_win(value.abs() + 1)) as i32;
 
             if value + inc > best_value {
@@ -2867,7 +2894,7 @@ impl Worker {
         beta: Value,
         _ply: i32,
     ) {
-        let nodes = self.nodes;
+        let nodes = self.nodes();
         let sel_depth = self.sel_depth;
         let pv_idx = self.pv_idx;
         let i = self.root_moves.iter().position(|rm| rm.pv[0] == mv).unwrap();
@@ -2941,7 +2968,8 @@ impl Worker {
             // MultiPV mode, we must take care to only do this for the first PV
             // line.
             if move_count > 1 && pv_idx == 0 {
-                self.best_move_changes += 1;
+                let c = &self.counters.best_move_changes;
+                c.store(c.load(Relaxed) + 1, Relaxed);
             }
         } else {
             // All other moves but the PV are set to the lowest value: this is
@@ -2988,7 +3016,7 @@ impl Worker {
 
         // Check if we have an upcoming move that draws by repetition
         if alpha < VALUE_DRAW && pos.upcoming_repetition(ply) {
-            alpha = value_draw(self.nodes);
+            alpha = value_draw(self.nodes());
             trace!(self, TRACE, repetition_draw(alpha));
             if alpha >= beta {
                 return alpha;
@@ -3308,11 +3336,9 @@ impl Worker {
 
 impl Worker {
     /// `SearchManager::check_time()`: stops the search when out of time or
-    /// nodes. With one thread `threads.nodes_searched()` is this worker's
-    /// count.
+    /// nodes, on the nodes of every thread (`threads.nodes_searched()`).
     #[inline(always)]
     fn check_time(&mut self) {
-        let nodes = self.nodes;
         let limits_nodes = self.limits.nodes;
         let mm = self.manager.as_deref_mut().unwrap();
         mm.calls_cnt -= 1;
@@ -3326,7 +3352,8 @@ impl Worker {
 
         // The elapsed time is read before the ponder flag, as in C++: a
         // ponderhit in between is seen with the time read before it.
-        let elapsed = mm.tm.elapsed(nodes);
+        let flags = &self.flags;
+        let elapsed = mm.tm.elapsed(|| flags.nodes_searched());
 
         // (C++ prints the debug statistics of dbg_hit_on() and friends here
         // once a second; the engine records none.)
@@ -3339,17 +3366,28 @@ impl Worker {
         let limits = &self.limits;
         if (limits.use_time_management() && (elapsed > mm.tm.maximum() || mm.stop_on_ponderhit))
             || (limits.movetime != 0 && elapsed >= limits.movetime)
-            || (limits.nodes != 0 && nodes >= limits.nodes)
+            || (limits.nodes != 0 && self.flags.nodes_searched() >= limits.nodes)
         {
             self.flags.stop.store(true, Relaxed);
         }
     }
 
-    /// `SearchManager::output_pv()`: sends the `info` lines of the PV lines.
+    /// `main_manager()->output_pv(*this, threads, tt, depth)`: sends the
+    /// `info` lines of the PV lines of this worker, the main one.
     pub fn output_pv(&mut self, depth: Depth) {
-        let nodes = self.nodes;
+        let mm = self.manager.take().unwrap();
+        let (nodes, tb_hits) = (self.flags.nodes_searched(), self.flags.tb_hits());
+        self.output_pv_of(&mm, nodes, tb_hits, depth);
+        self.manager = Some(mm);
+    }
+
+    /// `SearchManager::output_pv()`: the main manager `mm` sends the `info`
+    /// lines of the PV lines of this worker (the main one, or the best
+    /// thread at the end of the search), with `nodes` and `tb_hits` those of
+    /// every thread (`threads.nodes_searched()`, `threads.tb_hits()`).
+    pub fn output_pv_of(&mut self, mm: &SearchManager, nodes: u64, tb_hits: u64, depth: Depth) {
         let multi_pv = self.search_options.multi_pv.min(self.root_moves.len());
-        let tb_hits = self.tb_hits + if self.tb_config.root_in_tb { self.root_moves.len() as u64 } else { 0 };
+        let tb_hits = tb_hits + if self.tb_config.root_in_tb { self.root_moves.len() as u64 } else { 0 };
         let chess960 = self.root_pos.is_chess960();
 
         for i in 0..multi_pv {
@@ -3405,7 +3443,6 @@ impl Worker {
                 ""
             };
 
-            let mm = self.manager.as_deref().unwrap();
             let time = mm.tm.elapsed_time().max(1) as u64;
             let info = InfoFull {
                 depth: d,

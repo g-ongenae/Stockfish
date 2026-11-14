@@ -42,6 +42,16 @@ impl F64 {
         }
     }
 
+    /// `double(x)` of a `u64`.
+    #[inline]
+    pub fn from_u64(x: u64) -> F64 {
+        if SOFT {
+            F64(if x == 0 { 0.0 } else { round_pack(false, x as u128, 0).unwrap_or(x as f64) })
+        } else {
+            F64(x as f64)
+        }
+    }
+
     /// `double(x)` of an `i32` (exact on every target).
     #[inline]
     pub fn from_i32(x: i32) -> F64 {

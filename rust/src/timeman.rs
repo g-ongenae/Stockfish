@@ -81,9 +81,9 @@ impl TimeManagement {
     /// `elapsed(nodes)`: the nodes searched in 'nodes as time' mode, else the
     /// time since the start of the search.
     #[inline]
-    pub fn elapsed(&self, nodes: u64) -> TimePoint {
+    pub fn elapsed(&self, nodes: impl FnOnce() -> u64) -> TimePoint {
         if self.use_nodes_time {
-            nodes as TimePoint
+            nodes() as TimePoint
         } else {
             self.elapsed_time()
         }
