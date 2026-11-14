@@ -11,6 +11,7 @@
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use crate::misc::i64_to_f64;
 use crate::search::{LimitsType, SearchOptions};
 use crate::types::*;
 
@@ -63,7 +64,9 @@ pub fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64 {
 /// years). Rust's `as` would saturate instead.
 #[inline]
 pub fn to_timepoint(x: f64) -> TimePoint {
-    if (-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&x) {
+    // [-2^63, 2^63), the doubles that convert to an i64
+    const LIMIT: f64 = 9_223_372_036_854_775_808u64 as f64;
+    if (-LIMIT..LIMIT).contains(&x) {
         x as TimePoint
     } else {
         i64::MIN
@@ -266,7 +269,10 @@ impl TimeManagement {
                 .wrapping_sub(move_overhead.wrapping_mul((2 + mtg) as i64)),
         );
 
-        let time_us = limits.time[us] as f64;
+        // The integers the doubles below are computed from (i64_to_f64():
+        // rounded to a double on every target)
+        let time_us = i64_to_f64(limits.time[us]);
+        let time_left_f = i64_to_f64(time_left);
 
         // x basetime (+ z increment)
         // If there is a healthy increment, timeLeft can exceed the actual
@@ -275,24 +281,22 @@ impl TimeManagement {
         if limits.movestogo == 0 {
             // Extra time according to timeLeft
             if *original_time_adjust < 0.0 {
-                *original_time_adjust = 0.3272 * (time_left as f64).log10() - 0.4141;
+                *original_time_adjust = 0.3272 * time_left_f.log10() - 0.4141;
             }
 
             // Calculate time constants based on current time left.
-            let log_time_in_sec = (scaled_time as f64 / 1000.0).log10();
+            let log_time_in_sec = (i64_to_f64(scaled_time) / 1000.0).log10();
             let opt_constant = min_f64(0.0029869 + 0.00033554 * log_time_in_sec, 0.004905);
             let max_constant = max_f64(3.3744 + 3.0608 * log_time_in_sec, 3.1441);
 
-            opt_scale = min_f64(
-                0.012112 + (ply as f64 + 3.22713).powf(0.46866) * opt_constant,
-                0.19404 * time_us / time_left as f64,
-            ) * *original_time_adjust;
+            let by_ply = 0.012112 + (ply as f64 + 3.22713).powf(0.46866) * opt_constant;
+            opt_scale = min_f64(by_ply, 0.19404 * time_us / time_left_f) * *original_time_adjust;
 
             max_scale = min_f64(6.873, max_constant + ply as f64 / 12.352);
         }
         // x moves in y seconds (+ z increment)
         else {
-            opt_scale = min_f64((0.88 + ply as f64 / 116.4) / mtg as f64, 0.88 * time_us / time_left as f64);
+            opt_scale = min_f64((0.88 + ply as f64 / 116.4) / mtg as f64, 0.88 * time_us / time_left_f);
             max_scale = 1.3 + 0.11 * mtg as f64;
         }
 
@@ -308,18 +312,18 @@ impl TimeManagement {
         //   favors blunders.
         // Warning: don't remove this conditions.
         if !self.use_nodes_time && limits.movestogo != 1 {
-            let time_advantage = limits.time[us].wrapping_sub(limits.time[them]) as f64
-                / (1.0 + time_us + limits.time[them] as f64);
+            let time_them = i64_to_f64(limits.time[them]);
+            let lead = i64_to_f64(limits.time[us].wrapping_sub(limits.time[them]));
+            let time_advantage = lead / (1.0 + time_us + time_them);
             opt_scale *= 1.0 + 0.9 * min_f64(time_advantage, 0.0);
         }
 
         // Limit the maximum possible time for this move
-        let optimum = max_f64(1.0, opt_scale * time_left as f64);
+        let optimum = max_f64(1.0, opt_scale * time_left_f);
         self.optimum_time = to_timepoint(optimum);
-        let maximum = max_f64(
-            self.optimum_time as f64,
-            min_f64(0.8097 * time_us - move_overhead as f64, max_scale * self.optimum_time as f64),
-        );
+        let optimum_f = i64_to_f64(self.optimum_time);
+        let by_clock = 0.8097 * time_us - i64_to_f64(move_overhead);
+        let maximum = max_f64(optimum_f, min_f64(by_clock, max_scale * optimum_f));
         self.maximum_time = to_timepoint(maximum);
 
         if options.ponder {

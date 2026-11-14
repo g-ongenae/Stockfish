@@ -374,6 +374,7 @@ fn edges(out: &mut Out) {
 }
 
 fn main() {
+    stockfish::misc::set_double_precision();
     let mut digest = false;
     let mut extra = Extra::None;
     for a in std::env::args().skip(1) {

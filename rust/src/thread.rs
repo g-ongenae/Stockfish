@@ -138,6 +138,8 @@ impl ThreadPool {
             .name("search".into())
             .stack_size(TH_STACK_SIZE)
             .spawn(move || {
+                // the x87 control word is per thread (see the function)
+                crate::misc::set_double_precision();
                 if trace {
                     w.start_searching::<true>();
                 } else {

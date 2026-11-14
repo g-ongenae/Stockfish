@@ -39,7 +39,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
 use crate::history::*;
-use crate::misc::{Prng, ValueList};
+use crate::misc::{i64_to_f64, Prng, ValueList};
 use crate::movegen::MoveList;
 use crate::movepick::{Histories, MovePicker};
 use crate::nnue::{AccumulatorCaches, AccumulatorStack, Network};
@@ -275,7 +275,7 @@ fn interpolate_f64(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
 #[inline]
 fn interpolate_i64(x: i64, x0: i64, x1: i64, y0: f64, y1: f64) -> f64 {
     debug_assert!(x0 != x1);
-    y0 + (y1 - y0) * x.wrapping_sub(x0) as f64 / x1.wrapping_sub(x0) as f64
+    y0 + (y1 - y0) * i64_to_f64(x.wrapping_sub(x0)) / i64_to_f64(x1.wrapping_sub(x0))
 }
 
 pub type RootMoves = Vec<RootMove>;
@@ -1170,23 +1170,22 @@ impl Worker {
                 let high_best_move_effort =
                     clamp_f64(interpolate_i64(nodes_effort as i64, 75800, 104510, 0.969, 0.714), 0.693, 0.838);
 
-                let mut total_time = mm.tm.optimum() as f64
-                    * falling_eval
-                    * reduction
-                    * best_move_instability
-                    * high_best_move_effort;
+                let optimum = i64_to_f64(mm.tm.optimum());
+                // C++'s left-to-right order of the products
+                let partial = optimum * falling_eval * reduction;
+                let mut total_time = partial * best_move_instability * high_best_move_effort;
 
                 if self.root_moves.len() == 1 {
                     // Cap used time to 0.5s for a better viewer experience
-                    total_time = min_f64(500.0 * self.limits.npmsec.max(1) as f64, total_time);
+                    total_time = min_f64(500.0 * i64_to_f64(self.limits.npmsec.max(1)), total_time);
                 }
 
-                let elapsed_time = mm.tm.elapsed(self.nodes) as f64;
+                let elapsed_time = i64_to_f64(mm.tm.elapsed(self.nodes));
 
                 // Stop the search if we have exceeded totalTime or maximum
                 // time, or if we know that there are no better moves in the
                 // analysed line(s).
-                if elapsed_time > min_f64(total_time, mm.tm.maximum() as f64)
+                if elapsed_time > min_f64(total_time, i64_to_f64(mm.tm.maximum()))
                     || self.root_moves[multi_pv - 1].score >= mate_in(3)
                     || self.root_moves[0].score == mated_in(2)
                 {
