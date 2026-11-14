@@ -47,7 +47,7 @@ use crate::position::Position;
 use crate::score::Score;
 use crate::searchtrace::SearchTracer;
 use crate::thread::SharedFlags;
-use crate::timeman::{now, TimeManagement, TimePoint};
+use crate::timeman::{TimeManagement, TimePoint};
 use crate::tt::*;
 use crate::types::*;
 use crate::uci;
@@ -430,6 +430,20 @@ impl Skill {
     }
 }
 
+/// The generator of `Skill::pick_best`: C++ seeds a static `PRNG` with
+/// `now()` when it is first used, a time that differs from one run to the
+/// next. `now()` of the port counts from its first call, so the seed is taken
+/// from the system clock instead (milliseconds, as C++).
+fn skill_rng(rng: &mut Option<Prng>) -> &mut Prng {
+    rng.get_or_insert_with(|| {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(1);
+        Prng::new(ms | 1)
+    })
+}
+
 /// `SearchManager`: what the main thread keeps for itself.
 pub struct SearchManager {
     pub tm: TimeManagement,
@@ -442,8 +456,9 @@ pub struct SearchManager {
     pub best_previous_average_score: Value,
     pub stop_on_ponderhit: bool,
     pub updates: Arc<UpdateContext>,
-    /// The generator of `Skill::pick_best` (`static PRNG rng(now())`).
-    pub skill_rng: Prng,
+    /// The generator of `Skill::pick_best` (`static PRNG rng(now())`),
+    /// seeded on first use as the C++ static is.
+    pub skill_rng: Option<Prng>,
 }
 
 impl SearchManager {
@@ -459,7 +474,7 @@ impl SearchManager {
             best_previous_average_score: 0,
             stop_on_ponderhit: false,
             updates,
-            skill_rng: Prng::new(now() as u64 | 1),
+            skill_rng: None,
         }
     }
 }
@@ -1099,7 +1114,7 @@ impl Worker {
             // sub-optimal best move
             if skill.enabled() && skill.time_to_pick(self.root_depth) {
                 let mm = self.manager.as_deref_mut().unwrap();
-                skill.pick_best(&self.root_moves, multi_pv, &mut mm.skill_rng);
+                skill.pick_best(&self.root_moves, multi_pv, skill_rng(&mut mm.skill_rng));
             }
 
             // Do we have time for the next iteration? Can we stop searching
@@ -1129,7 +1144,7 @@ impl Worker {
                 skill.best
             } else {
                 let mm = self.manager.as_deref_mut().unwrap();
-                skill.pick_best(&self.root_moves, multi_pv, &mut mm.skill_rng)
+                skill.pick_best(&self.root_moves, multi_pv, skill_rng(&mut mm.skill_rng))
             };
             if pick != self.root_moves[0].pv[0] {
                 let i = self.root_moves.iter().position(|rm| rm.pv[0] == pick).unwrap();
