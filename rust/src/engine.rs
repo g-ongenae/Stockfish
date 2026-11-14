@@ -123,10 +123,13 @@ impl Engine {
             Some("Clear Hash") => self.search_clear(),
             // C++ loads the network at once and clears the workers
             // (load_network()), on every accepted value, the same one
-            // included. The port loads it on its next use (verify_network(),
-            // which clears them again if the file changed) and clears them
-            // now.
-            Some("EvalFile") => self.threads.clear(),
+            // included: so does the port, so that the next go does not spend
+            // its clock on it. The load prints nothing; a failure is reported
+            // by the next verify_network(), as before.
+            Some("EvalFile") => {
+                self.threads.clear();
+                self.load_network();
+            }
             Some("SyzygyPath") => {
                 if !self.options.string("SyzygyPath").is_empty() {
                     println!("info string Tablebases are not supported by this port");

@@ -38,6 +38,7 @@
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
+use crate::fp::{self, F64};
 use crate::history::*;
 use crate::misc::{Prng, ValueList};
 use crate::movegen::MoveList;
@@ -47,7 +48,6 @@ use crate::position::Position;
 use crate::score::Score;
 use crate::searchtrace::SearchTracer;
 use crate::thread::SharedFlags;
-use crate::fp::{self, F64};
 use crate::timeman::{TimeManagement, TimePoint, TmOptions};
 use crate::tt::*;
 use crate::types::*;
@@ -3324,6 +3324,10 @@ impl Worker {
         // nodes
         mm.calls_cnt = if limits_nodes != 0 { 512.min((limits_nodes / 1024) as i32) } else { 512 };
 
+        // The elapsed time is read before the ponder flag, as in C++: a
+        // ponderhit in between is seen with the time read before it.
+        let elapsed = mm.tm.elapsed(nodes);
+
         // (C++ prints the debug statistics of dbg_hit_on() and friends here
         // once a second; the engine records none.)
 
@@ -3332,7 +3336,6 @@ impl Worker {
             return;
         }
 
-        let elapsed = mm.tm.elapsed(nodes);
         let limits = &self.limits;
         if (limits.use_time_management() && (elapsed > mm.tm.maximum() || mm.stop_on_ponderhit))
             || (limits.movetime != 0 && elapsed >= limits.movetime)
