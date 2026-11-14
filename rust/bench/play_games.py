@@ -3,8 +3,9 @@
 (README.md, "Time management", gate 3): each opening of the sample's lines of
 play (its first plies) is played twice, colours swapped, single-threaded,
 with the clock kept here from the wall time of each move. Reports the games
-played, the losses on time, illegal moves and crashes (which must all be
-zero), and the score, for information only: it is not a strength test.
+played, the losses on time, illegal moves and crashes of each engine (the
+port's must all be zero), and the score, for information only: it is not a
+strength test. With --ponder both engines ponder (two cores).
 
 Needs python-chess: run it with the shared folder's Python
 ($STOCKFISH_SHARED/venv/bin/python); nothing is to be installed.
@@ -44,8 +45,7 @@ def play(white, black, opening, base, inc, ponder):
         board.push_uci(m)
     clock = {chess.WHITE: base, chess.BLACK: base}
     engines = {chess.WHITE: white, chess.BLACK: black}
-    for e in engines.values():
-        e.configure({"Ponder": ponder}) if ponder else None
+    # (python-chess sets the Ponder option itself, from ponder=)
     while not board.is_game_over(claim_draw=True) and board.ply() < 400:
         stm = board.turn
         limit = chess.engine.Limit(white_clock=clock[chess.WHITE], black_clock=clock[chess.BLACK],
@@ -85,7 +85,7 @@ def main():
     for e in (port, cpp):
         e.configure({"Threads": 1, "Hash": 16})
     score = {"port": 0.0, "C++": 0.0}
-    faults = {"time": 0, "illegal": 0, "crash": 0, "error": 0}
+    faults = {who: {"time": 0, "illegal": 0, "crash": 0, "error": 0} for who in ("port", "C++")}
     played = 0
     ops = list(openings(args.plies))
     for g in range(args.games):
@@ -100,17 +100,19 @@ def main():
         score["C++"] += 1 - pw if port_white else pw
         if loser is not None:
             key = reason.split()[0].rstrip(":")
-            faults[{"time": "time", "illegal": "illegal", "crash": "crash"}.get(key, "error")] += 1
             who = "port" if (loser == chess.WHITE) == port_white else "C++"
+            faults[who][{"time": "time", "illegal": "illegal", "crash": "crash"}.get(key, "error")] += 1
             reason += f" ({who})"
         print(f"game {g + 1}: port {'white' if port_white else 'black'}: {result} {reason}, "
               f"{time.time() - t:.0f} s", flush=True)
     port.quit()
     cpp.quit()
     print(f"{played} games at {args.time:g}+{args.inc:g} s{' with ponder' if args.ponder else ''}: "
-          f"port {score['port']:g}, C++ {score['C++']:g}; losses on time {faults['time']}, "
-          f"illegal moves {faults['illegal']}, crashes {faults['crash']}, other errors {faults['error']}")
-    sys.exit(1 if any(faults.values()) else 0)
+          f"port {score['port']:g}, C++ {score['C++']:g}")
+    for who, f in faults.items():
+        print(f"  {who}: losses on time {f['time']}, illegal moves {f['illegal']}, crashes {f['crash']}, "
+              f"other errors {f['error']}")
+    sys.exit(1 if any(faults["port"].values()) else 0)
 
 
 if __name__ == "__main__":

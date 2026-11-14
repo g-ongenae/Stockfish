@@ -92,6 +92,22 @@ Elsewhere, download it into `src/` and link that:
         ../tests/differential/search_trace.py bisect ../tests/differential/sample/standard.trace.gz \
         ../tests/differential/sample/standard.trace.jsonl.gz N
 
+    # time management (see "Time management"): the time manager against the
+    # C++ one (after the build of src/ below), natively and with the
+    # arithmetic in software of the i586 targets; searches on a clock under
+    # nodestime against the reference (part of `compare`, or the part the
+    # emulated targets run against the recorded output); the real clock
+    ARCH=x86-64-sse41-popcnt bench/build_tm_check.sh
+    cargo build --release -j2 --example tm_check
+    target/cpp/tm_check doubles > tm-cpp.txt
+    target/release/examples/tm_check doubles | cmp - tm-cpp.txt
+    target/cpp/tm_check digest | cmp - tm_check.expected
+    cargo build --release -j2 --features softfloat --target-dir target/softfloat --example tm_check
+    target/softfloat/release/examples/tm_check doubles | cmp - tm-cpp.txt
+    ./search_check.sh clock target/release/stockfish
+    EXE=$PWD/target/release/stockfish python3 bench/clock_behaviour.py
+    EXE=$PWD/target/release/stockfish $S/venv/bin/python bench/play_games.py --games 24
+
     # perft, the positions and node counts of tests/perft.sh
     ./perft.sh target/release/stockfish
 
@@ -651,6 +667,237 @@ work should go, in order of evidence:
   `UCI_ShowWDL` and other hash sizes are compared with the reference (see
   above), and since layer 8 pondering, `go infinite` and `nodestime`; skill
   levels and `UCI_LimitStrength`/`UCI_Elo` are ported and unchecked.
+
+## Time management
+
+`timeman.rs` ports `timeman.{h,cpp}` completely, and `search.rs` the clock
+side of `search.cpp`: the decisions at the end of each iteration of
+`iterative_deepening()` (`fallingEval`, `timeReduction` and
+`previousTimeReduction`, `totBestMoveChanges` and `bestMoveInstability`, the
+node effort of the best move, `totalTime`, the cap at 500 ms for a single
+legal move, the early stops on a mate, `stopOnPonderhit`, `increaseDepth`),
+`check_time()` with a clock, and in `start_searching()` the call of
+`advance_nodes_time()`. `go wtime/btime/winc/binc/movestogo` is accepted, with
+`go ponder` and `ponderhit` on a clock.
+
+### Design decisions
+
+- **The structure of C++.** `TimeManagement` with `init()`, `optimum()`,
+  `maximum()`, `elapsed()`, `clear()` and `advance_nodes_time()`, the state of
+  'nodes as time' mode (`availableNodes`, `previousMovesToGo`,
+  `cyclicBudget`) in it; `originalTimeAdjust`, `previousTimeReduction`,
+  `bestPreviousScore`, `bestPreviousAverageScore`, `iterValue`, `callsCnt`
+  and `stopOnPonderhit` in `SearchManager`, reset by `ThreadPool::clear()`
+  as in C++. `init()` takes the three options it reads (`TmOptions`:
+  `nodestime`, `Move Overhead`, `Ponder`) as they are when the search starts.
+- **Read where C++ reads.** The end of an iteration reads `bestMoveChanges`,
+  `effort` of the best move, the node count and the ponder flag after the
+  iteration, from the worker, as C++ does; `check_time()` reads the elapsed
+  time before the ponder flag, as C++ does (Sol's review); `callsCnt`
+  carries over from one search to the next, as in C++, which matters under
+  `nodestime` (the node at which the clock stops a search).
+- **`nodestime` rewrites the limits** as in C++: `limits.time[us]` becomes
+  the nodes left, `limits.inc[us]` and `movetime` are multiplied, and
+  `limits.npmsec` is set only when the side to move has a clock. The output
+  is unchanged by it: the `time` and `nps` of `info` lines are wall time in
+  both engines.
+- **The integer arithmetic wraps** where C++'s would overflow (undefined in
+  C++, wrapping in practice), and `TimePoint(double)` gives `i64::MIN` out
+  of range as `cvttsd2si` does on x86-64, where Rust's `as` would saturate.
+  Both need absurd inputs (a clock of 292 million years, a ply of
+  thousands); the driver below checks them.
+- **The network is loaded at `isready`, and at `setoption EvalFile`.** The
+  port read its network on the first `go`, after the clock of that `go` had
+  started (`startTime` is taken when `go` is parsed, as in C++): a first move
+  on a short clock could spend seconds loading 138 MB. C++ embeds its network
+  and has it from the start. The port now loads it at `isready`, which the
+  UCI protocol sends before a search for such initialisation, and when
+  `EvalFile` changes, as C++ does (Sol's review found the second case). The
+  load prints nothing; a missing network is still reported at its first use.
+- **The cost of starting a search is negligible.** The port creates a thread
+  with an 8 MiB stack for each search (layer 7): 22 µs from the spawn to its
+  first instruction (median of 2,000; 50 µs at the 99th percentile, under
+  1 ms at worst), and from sending `go depth 1` to reading `bestmove`
+  0.16 ms against 0.11 ms for C++ (median of 300, I/O included). Against the
+  10 ms of the default `Move Overhead`, nothing.
+- **No cost without a clock.** The end-of-iteration code runs only with a
+  clock; `check_time()` is unchanged in what it does per call. `bench`
+  speed, three interleaved runs in CPU time: master 166,800 to 170,400 nodes
+  per second, this layer 167,200 to 168,100 (the noise of this machine).
+
+### Floating point
+
+`init()` uses `std::log10`, `std::pow`, `std::min/max` on doubles, and the end
+of an iteration multiplies doubles into `totalTime`; the results are
+truncated to milliseconds (or nodes) or compared with them. Unlike the
+values of "The search", "Floating point", the inputs are unbounded, so no
+margin can be proved: the decisions must be computed as C++ computes them.
+
+- **x86-64, ARMv7, PowerPC.** Every operation is computed in the order of
+  C++ and rounded to a double (Rust never fuses operations; the C++ builds
+  have no FMA), `std::min/max/clamp` keep their tie rules, and the
+  conversions are those of C++. `log10` and `pow` are those of the C
+  library, as in C++: on x86-64 the very same glibc functions. The driver of
+  the time manager (below) gives the bits of the C++ output there, and ARMv7
+  the bits of x86-64 (every double of the driver identical).
+- **i586 (glibc and musl): the x87.** Without SSE2, `f64` arithmetic runs on
+  the x87 with 64-bit mantissas, and a product or quotient is not rounded to
+  a double before the next operation. Measured with the driver in CI: 7,534
+  of the 346,771 calls of `init()` gave another optimum or maximum than
+  C++, and not rarely: with round clocks the exact value of
+  `optScale * timeLeft` is often an integer, which the double computation
+  misses by one unit in the last place and the x87 does not (`wtime 10 winc
+  100 movestogo 40` under `nodestime 600`: 0.88 * 6000 / 2346000 * 2346000 is
+  5279.999... in doubles, 5280 on the x87, so 5279 or 5280 nodes). Setting
+  the x87 precision control to 53 bits fixes the arithmetic but breaks the C
+  library, whose `round()` (musl) relies on the 64-bit setting: tried, it
+  changed the scores printed on i586 musl, and reverted. So the doubles of
+  time management are `F64` (`fp.rs`): `+ - * /` and the conversion from an
+  integer are done in integer arithmetic with the rounding of IEEE 754 (to
+  nearest, ties to even) on the x87 targets, natively elsewhere. A unit test
+  compares the software operations with the native ones over 2 million
+  operands on the targets with IEEE arithmetic, and the feature `softfloat`
+  forces them on any target: on x86-64 the driver then gives the C++ output
+  bit for bit (CI checks it), and the clock sessions match. Only the time
+  manager and the end of an iteration use `F64`; nothing else changes.
+- **What remains: `log10` and `pow`** of the C library, which are not the
+  same code on every target. Measured in CI with `tm_check raw` against the
+  port on x86-64 (the three doubles of each call: `originalTimeAdjust` and
+  the two values truncated to the optimum and the maximum):
+
+  | Target | Calls whose doubles differ | Largest relative difference | Calls whose integers differ |
+  | --- | ---: | ---: | ---: |
+  | ARMv7 (glibc) | 0 of 346,771 | 0 | 0 |
+  | PowerPC (glibc) | 799 | 2.6e-15 | 0 |
+  | i586 glibc (x87 `log10`, `pow`) | 2,363 | 1.0e-15 | 0 |
+  | i586 musl | 2,330 | 1.0e-15 | 0 |
+
+  Every optimum and maximum is the C++ one on every target, and the
+  decisions of the end of an iteration use no `log10` or `pow` (their
+  arithmetic is exact everywhere). A last-bit difference changes a decision
+  only if the exact value lies within it of an integer: for a value of `v`
+  milliseconds (or nodes) and a relative difference `d`, a probability of
+  about `2·d·v` per call whose doubles differ, about 5e-12 for an optimum of
+  one second on PowerPC; and since these values come from `log10` and
+  `pow`, not from products of round numbers, nothing makes them fall on
+  integers (unlike the x87 case above). The options: accept it
+  (recommended, and done); tabulate `pow(ply + 3.22713, 0.46866)` for the
+  plies of a game, which removes `pow` but not `log10`; or port glibc's
+  x86-64 `log` (for `log10`) and `pow` to Rust on `F64`, with their tables
+  (some 600 lines), which would make every target exact by construction.
+  The last is what to do if bit-identity on every target is ever required
+  of the clock too.
+- **x87 and the rest of the engine**: the other doubles of the engine
+  (`to_cp`, the WDL model, the reduction table) have proven margins ("The
+  search", "Floating point") and are unchanged.
+
+### The gates
+
+1. **The time manager against the C++ one.** `bench/tm_check.cpp` links the
+   real `TimeManagement` and `OptionsMap` of a build of `src/`;
+   `examples/tm_check.rs` drives the port's through the same inputs from the
+   same random stream and prints the same lines: 346,771 calls of `init()`
+   in four sections (the product of short lists of times from 1 ms to 10
+   hours, increments, `movestogo`, plies, `Move Overhead`, `nodestime` and
+   `Ponder`; 100,000 random calls with a random earlier state; 3,000 games
+   with `advance_nodes_time()` between the calls and `ucinewgame` at times;
+   86 edges: time below the overhead, 1 ms, 1 move to go, negative
+   increments, a clock for the side not to move only, `movetime` with
+   `nodestime`, clocks of years and of millions of years, which reach the
+   out-of-range conversion). Identical on x86-64, the bits of
+   `originalTimeAdjust` included, natively and with `softfloat`; on the
+   emulated targets against `tm_check.expected`, the C++ digest. Of 22 bugs
+   planted one at a time in `timeman.rs`, 20 change the output; the other
+   2 cannot: C++'s reset of `previousMovesToGo` in `clear()` is dead (the
+   first call after it takes the branch that overwrites it), and
+   `scaledTime <= 1000` instead of `< 1000` gives the same `mtg` (50).
+2. **Whole searches under `nodestime`.** With `nodestime`, `elapsed()` counts
+   nodes, so a single-threaded search on a clock is deterministic and
+   comparable line for line with the reference: `tests/search/clock.sessions`
+   (57 searches written for the cases: sudden death, increment, `movestogo`
+   cycles with the cyclic budget, both colours, several moves of a game,
+   `ucinewgame` in the middle, 1 to 50 ms, `Move Overhead` 0 to 5000,
+   `Ponder`, a best move that changes often and one that never does, a forced
+   move with and without the 500 ms cap, mate found and mated in one, a clock
+   for the side not to move with depth and node limits, a clock with depth,
+   node and movetime limits, `go ponder ... depth N` then `ponderhit` or
+   `stop`, pondering past the time with a fail low, deeper searches), and
+   `tests/search/clockgames*.sessions`, generated by
+   `bench/make_clock_sessions.py` from the sample's lines of play (720
+   searches in standard chess, 268 in Chess960, from 30 ms to 60 s with
+   every kind of clock). All 1,045 identical to the C++ engine, every `info`
+   line and `bestmove`; with `softfloat` too (`clock.sessions`). `go infinite
+   ... depth N` then `stop` is compared in `tests/search/extra.sessions`. The
+   tracing binary does not take a clock (`searchtrace` runs `depth` and
+   `nodes` only, `nodestime` fixed at 0), so a divergence would have been
+   localised by the `info` lines (nodes per iteration) and a temporarily
+   instrumented build; none occurred.
+3. **The real clock.** The only differences from gate 2 are where
+   `elapsed()` reads its time (`now() - startTime` instead of the node count)
+   and that `advance_nodes_time()` is not called (`limits.npmsec` is 0):
+   `TimeManagement::elapsed()` and `start_searching()` say so in two lines.
+   `bench/clock_behaviour.py`: 44 first moves (11 clocks from 50 ms to 60 s,
+   with increment or `movestogo`, 4 positions) and 6 cases of `ponderhit` or
+   `stop` arriving mid-search, port and reference side by side. No move
+   beyond `maximum()` + 10 ms (the default `Move Overhead`); the port exceeds
+   `maximum()` by 5.2 ms at most, C++ by 1.6 ms: `check_time()` runs every
+   512 nodes, 3 ms at the port's speed on this machine against 1.4 ms (the
+   interval cannot change: it decides where node-limited searches stop). Time
+   used, port over C++: median 1.12, from 0.67 to 2.06 (different depths, at
+   2.2 times fewer nodes per second). A `ponderhit` after `maximum()` (counted
+   from the original `go`) ends the search within 1.5 ms. `bench/play_games.py`
+   (python-chess of the shared folder), 10 s + 0.1 s, single-threaded, Hash
+   16, openings from the sample's lines with colours swapped, on this
+   machine (2 cores, shared with other jobs): 24 games, no loss on time, no
+   illegal move and no crash of the port (C++ lost one game on time, by
+   159 ms); score 11 to 13, for information only. With pondering (both
+   engines search at once, on 2 cores): 6 games, one loss on time each (the
+   port by 180 ms, C++ by 30 ms), no illegal move, no crash: on this machine
+   pondering games are not conclusive about time either way. A first run of
+   the games, with a review building on the same cores, had losses on time
+   by both engines and was discarded.
+4. **What matched still matches**, on the final build, this machine: `full`
+   (392,703 positions), `lines-full` (4,432 lines, 350,908 records),
+   `trace-uci-full` and `trace-full` (17,270 searches), `bench` 3464885;
+   in CI on every target the samples of the harness and of the trace, the
+   deepest searches, the comparisons with the C++ engine (x86-64) and the
+   recorded outputs (emulated targets).
+
+### What the gates do not see
+
+Counted with a temporarily instrumented build over the clock sessions:
+every branch of `init()`, of the end of an iteration and of `check_time()`
+is reached, but:
+
+- **the low clamp of the node effort factor** (0.693): unreachable in C++ as
+  in the port, `nodesEffort` being at most 100,000, which gives 0.754;
+- **the `optConstant` cap** of `init()` (a clock of 6 days or more) and **the
+  time advantage term** (skipped under `nodestime` by design): reached by
+  the driver only, not in whole searches;
+- **`check_time()` stopping on `stopOnPonderhit`** after a `ponderhit` that
+  arrives mid-search: depends on when the command arrives; checked for
+  behaviour (gate 3);
+- everything that reads the real clock: behaviour only (gate 3).
+
+On a slow device the interval of `check_time()` (512 nodes) is long: at
+10,000 nodes per second, 51 ms beyond `maximum()`. The engine budgets for it
+with `Move Overhead` only, as C++ does: on such a device it should be raised
+(a GUI or the user sets it).
+
+### For the next layers
+
+- **Threads.** `check_time()` and the end of an iteration read the worker's
+  own `nodes` where C++ reads `threads.nodes_searched()`, the sum over the
+  workers, *during* the search; `elapsed()` under `nodestime` needs the same
+  sum, and so does `advance_nodes_time()` after the search. With a shared
+  counter that sum needs a representation without 64-bit atomics on 32-bit
+  PowerPC. `totBestMoveChanges` sums `bestMoveChanges` over the workers and
+  resets theirs, and `bestMoveInstability` divides by `threads.size()`
+  (`threads_size`, 1.0 today). `bestPreviousScore` and
+  `bestPreviousAverageScore` come from the best thread (`get_best_thread()`),
+  today the only one.
+- **Any new double** that a decision depends on should be `F64`, with its
+  operations in the order of C++.
 
 ## Speed and memory
 
