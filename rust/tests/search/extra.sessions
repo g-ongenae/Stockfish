@@ -26,3 +26,6 @@ position startpos ; go depth 10 searchmoves e2e4 d2d4 g1f3
 position startpos moves e2e4 e7e5 ; go depth 9 searchmoves b1c3
 # Long searches: currmove lines and the output on aspiration failures (more than 10M nodes)
 position fen r1bq1rk1/pp2bppp/2n1pn2/2pp4/3P4/2PBPN2/PP1N1PPP/R1BQ1RK1 w - - 0 9 ; go nodes 11000000
+# go infinite: the search reaches its depth limit and waits for stop
+position startpos moves e2e4 c7c5 ; go infinite depth 12 ; stop
+position fen 6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1 ; go infinite depth 6 ; stop

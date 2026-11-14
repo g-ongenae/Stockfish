@@ -38,6 +38,7 @@
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
+use crate::fp::{self, F64};
 use crate::history::*;
 use crate::misc::{Prng, ValueList};
 use crate::movegen::MoveList;
@@ -47,7 +48,7 @@ use crate::position::Position;
 use crate::score::Score;
 use crate::searchtrace::SearchTracer;
 use crate::thread::SharedFlags;
-use crate::timeman::{TimeManagement, TimePoint};
+use crate::timeman::{TimeManagement, TimePoint, TmOptions};
 use crate::tt::*;
 use crate::types::*;
 use crate::uci;
@@ -262,6 +263,22 @@ fn stable_sort(moves: &mut [RootMove]) {
     }
 }
 
+/// `interpolate()` of `misc.h` with doubles: `y0 + (y1 - y0) * (x - x0) /
+/// (x1 - x0)`.
+#[inline]
+fn interpolate_f64(x: F64, x0: f64, x1: f64, y0: f64, y1: f64) -> F64 {
+    debug_assert!(x0 != x1);
+    y0 + (F64(y1) - y0) * (x - x0) / (F64(x1) - x0)
+}
+
+/// `interpolate()` of `misc.h` with `i64` abscissae and double ordinates:
+/// the differences of the abscissae are taken in integers, then converted.
+#[inline]
+fn interpolate_i64(x: i64, x0: i64, x1: i64, y0: f64, y1: f64) -> F64 {
+    debug_assert!(x0 != x1);
+    y0 + (F64(y1) - y0) * F64::from_i64(x.wrapping_sub(x0)) / F64::from_i64(x1.wrapping_sub(x0))
+}
+
 pub type RootMoves = Vec<RootMove>;
 
 /// `LimitsType`: what the caller asks of the search.
@@ -299,6 +316,7 @@ pub struct SearchOptions {
     pub show_wdl: bool,
     pub move_overhead: i32,
     pub nodestime: i32,
+    pub ponder: bool,
     pub syzygy_50_move_rule: bool,
 }
 
@@ -312,6 +330,7 @@ impl Default for SearchOptions {
             show_wdl: false,
             move_overhead: 10,
             nodestime: 0,
+            ponder: false,
             syzygy_50_move_rule: true,
         }
     }
@@ -710,11 +729,9 @@ impl Worker {
 
         let us = self.root_pos.side_to_move();
         let game_ply = self.root_pos.game_ply();
-        let mut limits = std::mem::take(&mut self.limits);
-        let nodestime = self.search_options.nodestime;
-        let mm = self.main_manager();
-        mm.tm.init(&mut limits, us, game_ply, nodestime);
-        self.limits = limits;
+        let tm_options = TmOptions::of(&self.search_options);
+        let mm = self.manager.as_deref_mut().unwrap();
+        mm.tm.init(&mut self.limits, us, game_ply, tm_options, &mut mm.original_time_adjust);
         self.tt.new_search();
         (self.main_manager().updates.on_start)();
 
@@ -750,7 +767,7 @@ impl Worker {
         // When playing in 'nodes as time' mode, subtract the searched nodes
         // from the available ones before exiting.
         if self.limits.npmsec != 0 {
-            let n = self.nodes as i64 - self.limits.inc[us as usize];
+            let n = (self.nodes as i64).wrapping_sub(self.limits.inc[us as usize]);
             self.main_manager().tm.advance_nodes_time(n);
         }
 
@@ -808,8 +825,8 @@ impl Worker {
         let mut beta: Value;
         let mut best_value: Value = -VALUE_INFINITE;
         let us = self.root_pos.side_to_move();
-        let mut time_reduction: f64 = 1.0;
-        let mut tot_best_move_changes: f64 = 0.0;
+        let mut time_reduction = F64(1.0);
+        let mut tot_best_move_changes = F64(0.0);
         let mut delta: i32;
         let mut iter_idx: usize = 0;
 
@@ -1118,11 +1135,70 @@ impl Worker {
             }
 
             // Do we have time for the next iteration? Can we stop searching
-            // now? Time management is not ported yet (see README.md): the
-            // engine refuses a search with a clock.
-            if self.limits.use_time_management() && !self.flags.stop.load(Relaxed) {
-                let _ = (&mut time_reduction, &mut tot_best_move_changes, last_best_move_depth, iter_idx);
-                unreachable!("time management is not ported");
+            // now?
+            if self.limits.use_time_management()
+                && !self.flags.stop.load(Relaxed)
+                && !self.manager.as_deref().unwrap().stop_on_ponderhit
+            {
+                let nodes_effort: u64 = self.root_moves[0].effort.wrapping_mul(100000) / 1u64.max(self.nodes);
+
+                let mm = self.manager.as_deref_mut().unwrap();
+                let by_average = F64::from_i32(mm.best_previous_average_score - best_value);
+                let by_iteration = F64::from_i32(mm.iter_value[iter_idx] - best_value);
+                let mut falling_eval = (11.48 + 2.30 * by_average + 1.1 * by_iteration) / 100.0;
+                falling_eval = fp::clamp(falling_eval, 0.576, 1.728);
+
+                // If the bestMove is stable over several iterations, reduce
+                // time accordingly
+                let age = F64::from_i32(self.root_depth - last_best_move_depth);
+                time_reduction = fp::clamp(interpolate_f64(age, 4.96, 18.79, 0.639, 1.712), 0.629, 1.544);
+
+                let reduction = (1.468 + F64(mm.previous_time_reduction)) / (2.284 * time_reduction);
+
+                // Age out and update PV variability metric (of every thread:
+                // this one only for now)
+                tot_best_move_changes = tot_best_move_changes / 2.0;
+                tot_best_move_changes = tot_best_move_changes + F64::from_i64(self.best_move_changes as i64);
+                self.best_move_changes = 0;
+
+                let threads_size = 1.0;
+                let best_move_instability = 1.077 + 2.229 * tot_best_move_changes / threads_size;
+
+                let effort = interpolate_i64(nodes_effort as i64, 75800, 104510, 0.969, 0.714);
+                let high_best_move_effort = fp::clamp(effort, 0.693, 0.838);
+
+                let optimum = F64::from_i64(mm.tm.optimum());
+                // C++'s left-to-right order of the products
+                let partial = optimum * falling_eval * reduction;
+                let mut total_time = partial * best_move_instability * high_best_move_effort;
+
+                if self.root_moves.len() == 1 {
+                    // Cap used time to 0.5s for a better viewer experience
+                    total_time = fp::min(500.0 * F64::from_i64(self.limits.npmsec.max(1)), total_time);
+                }
+
+                let elapsed_time = F64::from_i64(mm.tm.elapsed(self.nodes));
+
+                // Stop the search if we have exceeded totalTime or maximum
+                // time, or if we know that there are no better moves in the
+                // analysed line(s).
+                if elapsed_time > fp::min(total_time, F64::from_i64(mm.tm.maximum()))
+                    || self.root_moves[multi_pv - 1].score >= mate_in(3)
+                    || self.root_moves[0].score == mated_in(2)
+                {
+                    // If we are allowed to ponder do not stop the search now
+                    // but keep pondering until the GUI sends "ponderhit" or
+                    // "stop".
+                    if self.flags.ponder.load(Relaxed) {
+                        mm.stop_on_ponderhit = true;
+                    } else {
+                        self.flags.stop.store(true, Relaxed);
+                    }
+                } else {
+                    self.flags
+                        .increase_depth
+                        .store(self.flags.ponder.load(Relaxed) || elapsed_time <= total_time * 0.50, Relaxed);
+                }
             }
 
             self.main_manager().iter_value[iter_idx] = best_value;
@@ -1135,7 +1211,7 @@ impl Worker {
             return false;
         }
 
-        self.main_manager().previous_time_reduction = time_reduction;
+        self.main_manager().previous_time_reduction = time_reduction.0;
 
         // If the skill level is enabled, swap the best PV line with the
         // sub-optimal one
@@ -3248,6 +3324,10 @@ impl Worker {
         // nodes
         mm.calls_cnt = if limits_nodes != 0 { 512.min((limits_nodes / 1024) as i32) } else { 512 };
 
+        // The elapsed time is read before the ponder flag, as in C++: a
+        // ponderhit in between is seen with the time read before it.
+        let elapsed = mm.tm.elapsed(nodes);
+
         // (C++ prints the debug statistics of dbg_hit_on() and friends here
         // once a second; the engine records none.)
 
@@ -3256,7 +3336,6 @@ impl Worker {
             return;
         }
 
-        let elapsed = mm.tm.elapsed(nodes);
         let limits = &self.limits;
         if (limits.use_time_management() && (elapsed > mm.tm.maximum() || mm.stop_on_ponderhit))
             || (limits.movetime != 0 && elapsed >= limits.movetime)

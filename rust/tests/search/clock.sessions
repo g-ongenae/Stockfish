@@ -1,0 +1,61 @@
+# Searches on a clock for direct comparisons with the reference binary
+# (bench/compare_uci.py; README.md, "Time management"). Every session runs
+# under nodestime, where time is counted in nodes and a search on a clock is
+# deterministic; each sets the three options init() reads, since options
+# persist from one session to the next. Hand-written: the cases the generated
+# games (clockgames*.sessions) may miss.
+#
+# Sudden death, White then Black to move, several moves of a game: the nodes
+# left carry over from one go to the next
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos ; go wtime 20000 btime 20000 ; position startpos moves e2e4 e7e5 ; go wtime 19000 btime 19500 ; position startpos moves e2e4 e7e5 g1f3 b8c6 ; go wtime 18000 btime 19000 ; position startpos moves e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 ; go wtime 17000 btime 18500
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos moves e2e4 ; go wtime 20000 btime 20000 ; position startpos moves e2e4 c7c5 g1f3 ; go wtime 19500 btime 19000 ; position startpos moves e2e4 c7c5 g1f3 d7d6 d2d4 ; go wtime 19000 btime 18000
+# Increment, and a time advantage (unused under nodestime, but parsed)
+setoption name nodestime value 30 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos moves d2d4 ; go wtime 5000 btime 3000 winc 500 binc 500 ; position startpos moves d2d4 g8f6 c2c4 ; go wtime 5200 btime 3100 winc 500 binc 500 ; position startpos moves d2d4 g8f6 c2c4 e7e6 g1f3 ; go wtime 5300 btime 3300 winc 500 binc 500
+# movestogo cycles: 3, 2, 1, then a new cycle of 40, which adds the cyclic budget
+setoption name nodestime value 20 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos ; go wtime 3000 btime 3000 movestogo 3 ; position startpos moves e2e4 e7e5 ; go wtime 2000 btime 2000 movestogo 2 ; position startpos moves e2e4 e7e5 g1f3 b8c6 ; go wtime 1000 btime 1000 movestogo 1 ; position startpos moves e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 ; go wtime 4000 btime 4000 movestogo 40
+setoption name nodestime value 20 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos moves c2c4 ; go wtime 2000 btime 2000 winc 100 binc 100 movestogo 1 ; position startpos moves c2c4 e7e5 b1c3 ; go wtime 2100 btime 2100 winc 100 binc 100 movestogo 1
+# ucinewgame in the middle: the nodes left are reset
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos ; go wtime 10000 btime 10000 ; position startpos moves e2e4 e7e5 ; go wtime 9000 btime 9000 ; ucinewgame ; position startpos moves e2e4 e7e5 ; go wtime 9000 btime 9000
+# Very little time: below one second (mtg reduced), a few nodes, and 1 ms
+setoption name nodestime value 100 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos ; go wtime 50 btime 50 ; position startpos moves e2e4 e7e5 ; go wtime 20 btime 20 ; position startpos moves e2e4 e7e5 g1f3 b8c6 ; go wtime 5 btime 5
+setoption name nodestime value 10 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4 ; go wtime 1 btime 1
+setoption name nodestime value 10 ; setoption name Move Overhead value 0 ; setoption name Ponder value false ; position startpos moves g1f3 ; go wtime 1 btime 1 binc 1000
+# Move Overhead: none, large, and more than the clock
+setoption name nodestime value 50 ; setoption name Move Overhead value 0 ; setoption name Ponder value false ; position startpos ; go wtime 5000 btime 5000 ; position startpos moves e2e4 e7e6 ; go wtime 4800 btime 4800
+setoption name nodestime value 50 ; setoption name Move Overhead value 1000 ; setoption name Ponder value false ; position startpos ; go wtime 5000 btime 5000 winc 100 binc 100 ; position startpos moves e2e4 e7e6 ; go wtime 4800 btime 4800 winc 100 binc 100
+setoption name nodestime value 50 ; setoption name Move Overhead value 5000 ; setoption name Ponder value false ; position startpos moves e2e4 ; go wtime 3000 btime 3000 movestogo 10
+# Ponder on: the optimum grows by a quarter
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position startpos ; go wtime 10000 btime 10000 ; position startpos moves d2d4 d7d5 ; go wtime 9500 btime 9500
+# A position where the best move changes often, and one where it never does
+setoption name nodestime value 20 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1 ; go wtime 60000 btime 60000
+setoption name nodestime value 20 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen r1bq1rk1/pp2bppp/2n1pn2/2pp4/3P4/2PBPN2/PP1N1PPP/R1BQ1RK1 w - - 0 9 ; go wtime 120000 btime 120000 winc 1000 binc 1000
+setoption name nodestime value 20 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen rnb1kbnr/pppp1ppp/8/4p3/4P3/5q2/PPPP1PPP/RNB1KBNR w KQkq - 0 3 ; go wtime 60000 btime 60000
+# A forced move: one legal move, the time capped at 500 ms worth of nodes
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen k7/8/8/8/8/8/1r6/K7 w - - 0 1 ; go wtime 60000 btime 60000
+setoption name nodestime value 1 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen k7/8/8/8/8/8/1r6/K7 w - - 0 1 ; go wtime 60000 btime 60000 winc 1000 binc 1000
+# Mate scores: a mate in 1 found, mated in 1, and a longer mate
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen 6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1 ; go wtime 60000 btime 60000
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen br4k1/2b5/8/8/8/p3p3/P5PP/7K w - - 0 1 ; go wtime 60000 btime 60000
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen 6k1/8/8/8/8/r7/1r4PP/7K w - - 0 1 ; go wtime 30000 btime 30000
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen 8/8/8/8/4k3/8/8/R3K3 w Q - 0 1 ; go wtime 60000 btime 60000 winc 1000 binc 1000
+# A clock for the side not to move only (no time management for us), with
+# and without a depth limit (tests/instrumented.py's mismatched clock)
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos ; go depth 3 btime 1000
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos moves e2e4 ; go depth 9 wtime 1000 ; go nodes 20000 wtime 1000 winc 100
+# A clock together with depth, nodes and movetime limits
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos ; go wtime 60000 btime 60000 depth 6 ; position startpos moves e2e4 e7e5 ; go wtime 60000 btime 60000 nodes 3000 ; position startpos moves e2e4 e7e5 g1f3 b8c6 ; go wtime 60000 btime 60000 movetime 100
+# Pondering with a depth limit: go ponder runs to its depth, then ponderhit
+# or stop ends it (the nodes it used still count)
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position startpos moves e2e4 e7e5 ; go ponder wtime 10000 btime 10000 depth 9 ; ponderhit ; position startpos moves e2e4 e7e5 g1f3 b8c6 ; go wtime 9800 btime 9800
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position startpos moves d2d4 d7d5 ; go ponder wtime 2000 btime 2000 winc 100 binc 100 depth 12 ; stop ; position startpos moves d2d4 d7d5 c2c4 ; go ponder wtime 2000 btime 2000 winc 100 binc 100 depth 12 ; ponderhit
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position fen 6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1 ; go ponder wtime 60000 btime 60000 depth 5 ; ponderhit
+# Longer: deeper iterations, so that the best move's age and the effort
+# weigh, over a few moves of a game
+setoption name nodestime value 10 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position startpos moves e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 ; go wtime 600000 btime 600000 winc 5000 binc 5000 ; position startpos moves e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1e3 e7e5 ; go wtime 600000 btime 600000 winc 5000 binc 5000
+# A forced move on a small clock: the time left is below the 500 ms cap
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value false ; position fen k7/8/8/8/8/8/1r6/K7 w - - 0 1 ; go wtime 300 btime 300
+# Pondering past the time, deep: the stop is deferred to ponderhit
+# (stopOnPonderhit), then reset by a fail low, before the depth limit
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1 ; go ponder wtime 200 btime 200 depth 18 ; ponderhit
+setoption name nodestime value 50 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position fen r1bq1rk1/pp2bppp/2n1pn2/2pp4/3P4/2PBPN2/PP1N1PPP/R1BQ1RK1 w - - 0 9 ; go ponder wtime 100 btime 100 depth 18 ; stop
+setoption name nodestime value 20 ; setoption name Move Overhead value 10 ; setoption name Ponder value true ; position startpos moves e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 ; go ponder wtime 300 btime 300 depth 19 ; ponderhit

@@ -198,6 +198,8 @@ impl UciEngine {
                 let _ = writeln!(out, "uciok");
             }
             b"isready" => {
+                // the network, if none is loaded yet (see preload_network())
+                self.engine.preload_network();
                 let _ = writeln!(io::stdout().lock(), "readyok");
             }
             b"ucinewgame" => self.engine.search_clear(),
@@ -349,8 +351,6 @@ impl UciEngine {
 
         if limits.perft != 0 {
             self.perft(limits.perft);
-        } else if limits.use_time_management() {
-            println!("info string Time management is not ported yet: use go depth, nodes, movetime or infinite");
         } else {
             self.engine.go(limits);
         }
