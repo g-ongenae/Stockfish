@@ -1179,6 +1179,47 @@ impl Position {
     }
 
     /// FEN of the position, Shredder-FEN castling rights in Chess960.
+    /// `flip()`: the position with the colours swapped and the board
+    /// mirrored vertically, set from its FEN as in C++ (the history of the
+    /// moves before it is not kept, as C++'s set() does not keep it).
+    pub fn flip(&mut self) -> Result<(), PositionSetError> {
+        let fen = self.fen();
+        let mut fields = fen.split(' ');
+        let placement = fields.next().unwrap_or("");
+        let color = fields.next().unwrap_or("");
+        let castling = fields.next().unwrap_or("");
+        let ep = fields.next().unwrap_or("-");
+        let rest: Vec<&str> = fields.collect();
+
+        // Piece placement, ranks in reverse order
+        let mut f = placement.split('/').rev().collect::<Vec<_>>().join("/");
+        f.push(' ');
+        f += if color == "w" { "B " } else { "W " }; // Will be lowercased later
+        f += castling;
+        f.push(' ');
+        let swap_case = |c: char| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() };
+        let mut f: String = f.chars().map(swap_case).collect();
+
+        // En passant square
+        if ep == "-" {
+            f += ep;
+        } else {
+            let mut e: Vec<char> = ep.chars().collect();
+            if e.len() > 1 {
+                e[1] = if e[1] == '3' { '6' } else { '3' };
+            }
+            f.extend(e);
+        }
+
+        // Half and full moves
+        for t in rest {
+            f.push(' ');
+            f += t;
+        }
+        let chess960 = self.is_chess960();
+        self.set(f.as_bytes(), chess960)
+    }
+
     pub fn fen(&self) -> String {
         let mut s = String::with_capacity(96);
 

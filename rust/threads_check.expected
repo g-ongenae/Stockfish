@@ -1,0 +1,630 @@
+next_power_of_two 1 1
+next_power_of_two 2 2
+next_power_of_two 3 4
+next_power_of_two 4 4
+next_power_of_two 5 8
+next_power_of_two 6 8
+next_power_of_two 7 8
+next_power_of_two 8 8
+next_power_of_two 9 16
+next_power_of_two 12 16
+next_power_of_two 16 16
+next_power_of_two 17 32
+next_power_of_two 31 32
+next_power_of_two 32 32
+next_power_of_two 33 64
+next_power_of_two 64 64
+next_power_of_two 100 128
+next_power_of_two 255 256
+next_power_of_two 256 256
+next_power_of_two 257 512
+next_power_of_two 1024 1024
+next_power_of_two 4096 4096
+shared 1 size 65536 pawn 8192 mask 65535 pawn_mask 8191
+  correction 100:0-65536
+  pawn 100:0-8192
+shared 2 size 131072 pawn 16384 mask 131071 pawn_mask 16383
+  correction 100:0-65536 101:65536-131072
+  pawn 100:0-8192 101:8192-16384
+shared 3 size 262144 pawn 32768 mask 262143 pawn_mask 32767
+  correction 100:0-87381 101:87381-174762 102:174762-262144
+  pawn 100:0-10922 101:10922-21845 102:21845-32768
+shared 4 size 262144 pawn 32768 mask 262143 pawn_mask 32767
+  correction 100:0-65536 101:65536-131072 102:131072-196608 103:196608-262144
+  pawn 100:0-8192 101:8192-16384 102:16384-24576 103:24576-32768
+shared 5 size 524288 pawn 65536 mask 524287 pawn_mask 65535
+  correction 100:0-104857 101:104857-209715 102:209715-314572 103:314572-419430 104:419430-524288
+  pawn 100:0-13107 101:13107-26214 102:26214-39321 103:39321-52428 104:52428-65536
+shared 6 size 524288 pawn 65536 mask 524287 pawn_mask 65535
+  correction 100:0-87381 101:87381-174762 102:174762-262144 103:262144-349525 104:349525-436906 105:436906-524288
+  pawn 100:0-10922 101:10922-21845 102:21845-32768 103:32768-43690 104:43690-54613 105:54613-65536
+shared 7 size 524288 pawn 65536 mask 524287 pawn_mask 65535
+  correction 100:0-74898 101:74898-149796 102:149796-224694 103:224694-299593 104:299593-374491 105:374491-449389 106:449389-524288
+  pawn 100:0-9362 101:9362-18724 102:18724-28086 103:28086-37449 104:37449-46811 105:46811-56173 106:56173-65536
+shared 8 size 524288 pawn 65536 mask 524287 pawn_mask 65535
+  correction 100:0-65536 101:65536-131072 102:131072-196608 103:196608-262144 104:262144-327680 105:327680-393216 106:393216-458752 107:458752-524288
+  pawn 100:0-8192 101:8192-16384 102:16384-24576 103:24576-32768 104:32768-40960 105:40960-49152 106:49152-57344 107:57344-65536
+shared 9 size 1048576 pawn 131072 mask 1048575 pawn_mask 131071
+  correction 100:0-116508 101:116508-233016 102:233016-349525 103:349525-466033 104:466033-582542 105:582542-699050 106:699050-815559 107:815559-932067 108:932067-1048576
+  pawn 100:0-14563 101:14563-29127 102:29127-43690 103:43690-58254 104:58254-72817 105:72817-87381 106:87381-101944 107:101944-116508 108:116508-131072
+start threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+dirty threads 1
+  shared size 65536 pawn 8192 pawn_history C3F6E0DFD577CAA4 correction_history 1C6DC535D5FCD6E5 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/1 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 524288 generation 3 nonzero 52047 hashfull 5
+ucinewgame threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+threads threads 2
+  shared size 131072 pawn 16384 pawn_history 0F685960C86CE325 correction_history D36F83CAB6802325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/2 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/2 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+hash threads 2
+  shared size 131072 pawn 16384 pawn_history 0F685960C86CE325 correction_history D36F83CAB6802325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/2 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/2 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+dirty threads 2
+  shared size 131072 pawn 16384 pawn_history 56482DA246E3611B correction_history 92173A5A9DA107F7 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/2 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  worker 1 numa 1/2 main 0 shared 1 main_history B299D975F4809D5E capture_history 88174F245E826EA6 continuation_correction_history 78404CE9E3A9D6D5 ttmove_history 8
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 524288 generation 3 nonzero 52070 hashfull 4
+ucinewgame threads 2
+  shared size 131072 pawn 16384 pawn_history 0F685960C86CE325 correction_history D36F83CAB6802325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/2 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/2 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+clear_hash threads 2
+  shared size 131072 pawn 16384 pawn_history 0F685960C86CE325 correction_history D36F83CAB6802325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/2 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/2 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+threads threads 3
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/3 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+hash threads 3
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/3 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 163840 generation 0 nonzero 0 hashfull 0
+dirty threads 3
+  shared size 262144 pawn 32768 pawn_history 15341BD1540CE2C9 correction_history 40C8BABE2DD79AB5 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/3 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  worker 1 numa 1/3 main 0 shared 1 main_history B299D975F4809D5E capture_history 88174F245E826EA6 continuation_correction_history 78404CE9E3A9D6D5 ttmove_history 8
+  worker 2 numa 2/3 main 0 shared 1 main_history FFE5EB9539F88274 capture_history B7A9822D94CFAEFB continuation_correction_history F8B3EC4AFE59F79A ttmove_history 9
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 163840 generation 3 nonzero 51953 hashfull 10
+ucinewgame threads 3
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/3 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 163840 generation 0 nonzero 0 hashfull 0
+clear_hash threads 3
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/3 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/3 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 163840 generation 0 nonzero 0 hashfull 0
+threads threads 4
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/4 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 163840 generation 0 nonzero 0 hashfull 0
+hash threads 4
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/4 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+dirty threads 4
+  shared size 262144 pawn 32768 pawn_history 15341BD1540CE2C9 correction_history 40C8BABE2DD79AB5 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/4 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  worker 1 numa 1/4 main 0 shared 1 main_history B299D975F4809D5E capture_history 88174F245E826EA6 continuation_correction_history 78404CE9E3A9D6D5 ttmove_history 8
+  worker 2 numa 2/4 main 0 shared 1 main_history FFE5EB9539F88274 capture_history B7A9822D94CFAEFB continuation_correction_history F8B3EC4AFE59F79A ttmove_history 9
+  worker 3 numa 3/4 main 0 shared 1 main_history F527840C26CEDAFE capture_history 541DD999BB0F9D92 continuation_correction_history AE4923930E6DF6A5 ttmove_history 10
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 32768 generation 3 nonzero 52017 hashfull 46
+ucinewgame threads 4
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/4 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+clear_hash threads 4
+  shared size 262144 pawn 32768 pawn_history 286B6A794607A325 correction_history 4BC0056737962325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/4 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/4 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+threads threads 8
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/8 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 7 numa 7/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+hash threads 8
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/8 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 7 numa 7/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 98304 generation 0 nonzero 0 hashfull 0
+dirty threads 8
+  shared size 524288 pawn 65536 pawn_history EAC96260021C316F correction_history 75691F2F5EAF7523 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/8 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  worker 1 numa 1/8 main 0 shared 1 main_history B299D975F4809D5E capture_history 88174F245E826EA6 continuation_correction_history 78404CE9E3A9D6D5 ttmove_history 8
+  worker 2 numa 2/8 main 0 shared 1 main_history FFE5EB9539F88274 capture_history B7A9822D94CFAEFB continuation_correction_history F8B3EC4AFE59F79A ttmove_history 9
+  worker 3 numa 3/8 main 0 shared 1 main_history F527840C26CEDAFE capture_history 541DD999BB0F9D92 continuation_correction_history AE4923930E6DF6A5 ttmove_history 10
+  worker 4 numa 4/8 main 0 shared 1 main_history 461A9E3E94807C38 capture_history A18BDE6FAFF11B63 continuation_correction_history E635BC336A66644A ttmove_history 11
+  worker 5 numa 5/8 main 0 shared 1 main_history 0E015A7D5045FE7E capture_history 308FA608D954E26A continuation_correction_history BDC01E9758DDB58C ttmove_history 12
+  worker 6 numa 6/8 main 0 shared 1 main_history 44343E313DF90B35 capture_history 206FA00BEDA9F7C7 continuation_correction_history 474BF8B927D578AB ttmove_history 13
+  worker 7 numa 7/8 main 0 shared 1 main_history 2E942DC1F24A7A0A capture_history BC316E20B12DFFBC continuation_correction_history FAC364A4E05B98F8 ttmove_history 14
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 98304 generation 3 nonzero 52151 hashfull 12
+ucinewgame threads 8
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/8 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 7 numa 7/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 98304 generation 0 nonzero 0 hashfull 0
+clear_hash threads 8
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/8 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 7 numa 7/8 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 98304 generation 0 nonzero 0 hashfull 0
+threads threads 5
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/5 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 98304 generation 0 nonzero 0 hashfull 0
+hash threads 5
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/5 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+dirty threads 5
+  shared size 524288 pawn 65536 pawn_history EAC96260021C316F correction_history 75691F2F5EAF7523 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/5 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  worker 1 numa 1/5 main 0 shared 1 main_history B299D975F4809D5E capture_history 88174F245E826EA6 continuation_correction_history 78404CE9E3A9D6D5 ttmove_history 8
+  worker 2 numa 2/5 main 0 shared 1 main_history FFE5EB9539F88274 capture_history B7A9822D94CFAEFB continuation_correction_history F8B3EC4AFE59F79A ttmove_history 9
+  worker 3 numa 3/5 main 0 shared 1 main_history F527840C26CEDAFE capture_history 541DD999BB0F9D92 continuation_correction_history AE4923930E6DF6A5 ttmove_history 10
+  worker 4 numa 4/5 main 0 shared 1 main_history 461A9E3E94807C38 capture_history A18BDE6FAFF11B63 continuation_correction_history E635BC336A66644A ttmove_history 11
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 65536 generation 3 nonzero 51999 hashfull 22
+ucinewgame threads 5
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/5 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+clear_hash threads 5
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/5 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/5 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+threads threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+hash threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+dirty threads 1
+  shared size 65536 pawn 8192 pawn_history C3F6E0DFD577CAA4 correction_history 1C6DC535D5FCD6E5 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/1 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 524288 generation 3 nonzero 52098 hashfull 2
+ucinewgame threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+clear_hash threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+threads threads 7
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/7 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 524288 generation 0 nonzero 0 hashfull 0
+hash threads 7
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/7 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+dirty threads 7
+  shared size 524288 pawn 65536 pawn_history EAC96260021C316F correction_history 75691F2F5EAF7523 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/7 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  worker 1 numa 1/7 main 0 shared 1 main_history B299D975F4809D5E capture_history 88174F245E826EA6 continuation_correction_history 78404CE9E3A9D6D5 ttmove_history 8
+  worker 2 numa 2/7 main 0 shared 1 main_history FFE5EB9539F88274 capture_history B7A9822D94CFAEFB continuation_correction_history F8B3EC4AFE59F79A ttmove_history 9
+  worker 3 numa 3/7 main 0 shared 1 main_history F527840C26CEDAFE capture_history 541DD999BB0F9D92 continuation_correction_history AE4923930E6DF6A5 ttmove_history 10
+  worker 4 numa 4/7 main 0 shared 1 main_history 461A9E3E94807C38 capture_history A18BDE6FAFF11B63 continuation_correction_history E635BC336A66644A ttmove_history 11
+  worker 5 numa 5/7 main 0 shared 1 main_history 0E015A7D5045FE7E capture_history 308FA608D954E26A continuation_correction_history BDC01E9758DDB58C ttmove_history 12
+  worker 6 numa 6/7 main 0 shared 1 main_history 44343E313DF90B35 capture_history 206FA00BEDA9F7C7 continuation_correction_history 474BF8B927D578AB ttmove_history 13
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 32768 generation 3 nonzero 52022 hashfull 54
+ucinewgame threads 7
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/7 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+clear_hash threads 7
+  shared size 524288 pawn 65536 pawn_history 5FF4024A126D2325 correction_history 9F53795D913A2325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/7 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 1 numa 1/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 2 numa 2/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 3 numa 3/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 4 numa 4/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 5 numa 5/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  worker 6 numa 6/7 main 0 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+threads threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 32768 generation 0 nonzero 0 hashfull 0
+hash threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+dirty threads 1
+  shared size 65536 pawn 8192 pawn_history C3F6E0DFD577CAA4 correction_history 1C6DC535D5FCD6E5 continuation_history 586D648B867AFD0C
+  worker 0 numa 0/1 main 1 shared 1 main_history 0859704DAD76476B capture_history 2EFEC9E73CE57B0F continuation_correction_history 25981C227189113E ttmove_history 7
+  manager 11 1.5 12 13 2.5 -1
+  tt clusters 65536 generation 3 nonzero 52043 hashfull 20
+ucinewgame threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+clear_hash threads 1
+  shared size 65536 pawn 8192 pawn_history 6A43585227C38325 correction_history B83C88CF82532325 continuation_history 6655B0CDC5297451
+  worker 0 numa 0/1 main 1 shared 1 main_history B37F4190FC3BA325 capture_history DB00ED5CDCE4E325 continuation_correction_history 777B3C5B23FE2325 ttmove_history 0
+  manager 32001 0.85 0 32001 -1 -1
+  tt clusters 65536 generation 0 nonzero 0 hashfull 0
+best 1 796/31987/6/0 -> 0
+best 1 731/698/6/0 -> 0
+best 1 405/-18/6/2 -> 0
+best 1 405/31980/4/5 -> 0
+best 1 796/31721/1/4 -> 0
+best 1 731/-31985/5/2 -> 0
+best 1 666/-31725/3/2 -> 0
+best 1 731/1761/6/1 -> 0
+best 1 405/-32001/5/0 -> 0
+best 1 731/783/5/3 -> 0
+best 1 82/839/6/3 -> 0
+best 1 731/-414/6/5 -> 0
+best 1 731/-14/4/5 -> 0
+best 1 405/-31979/3/4 -> 0
+best 1 731/-32001/4/1 -> 0
+best 1 666/31716/1/5 -> 0
+best 1 796/-1015/4/1 -> 0
+best 1 666/31736/1/1 -> 0
+best 1 82/31752/5/3 -> 0
+best 1 731/1211/5/2 -> 0
+best 1 82/16/4/3 -> 0
+best 1 796/-4/4/1 -> 0
+best 1 796/-31983/5/5 -> 0
+best 1 731/7/3/3 -> 0
+best 1 796/31722/2/4 -> 0
+best 2 82/4/5/5 405/-10/6/4 -> 0
+best 2 731/31745/5/3 405/1537/1/1 -> 0
+best 2 731/-32001/5/1 405/31741/1/4 -> 1
+best 2 796/-17/5/1 731/31989/1/0 -> 1
+best 2 405/-1782/3/5 405/-2/1/0 -> 0
+best 2 796/-19/5/1 666/-1283/3/0 -> 0
+best 2 731/-31737/4/4 796/-1745/6/1 -> 0
+best 2 82/-9/5/0 82/-31977/1/5 -> 1
+best 2 405/-834/4/0 405/-1375/2/3 -> 0
+best 2 82/20/3/4 796/15/1/5 -> 0
+best 2 82/31994/2/0 731/-31970/5/0 -> 0
+best 2 796/-31717/4/2 796/-1591/6/3 -> 0
+best 2 405/-32001/4/2 405/-32001/5/5 -> 0
+best 2 82/31713/2/2 666/-31705/3/3 -> 0
+best 2 731/1202/3/4 731/-1665/1/3 -> 0
+best 2 731/-31739/1/5 405/1300/4/1 -> 0
+best 2 82/-32001/2/3 796/-31745/6/4 -> 1
+best 2 796/-23/5/2 731/-233/1/3 -> 0
+best 2 82/-31974/3/0 82/1170/1/5 -> 0
+best 2 731/-31992/2/1 405/7/3/2 -> 1
+best 2 731/1315/3/4 405/210/1/0 -> 0
+best 2 796/532/5/3 666/-31975/4/5 -> 1
+best 2 731/1780/4/5 731/-32001/1/1 -> 0
+best 2 796/-32001/5/4 731/-32001/5/0 -> 0
+best 2 796/-12/1/4 666/-31971/2/1 -> 0
+best 3 796/31982/4/3 405/1683/2/1 666/-330/3/5 -> 0
+best 3 666/-4/2/0 666/31983/5/3 405/31998/1/1 -> 1
+best 3 731/-714/5/3 731/-15/5/1 796/1649/1/4 -> 2
+best 3 796/-1262/3/2 731/-702/5/0 666/31978/4/0 -> 2
+best 3 666/31735/1/4 796/-31980/2/3 405/15/1/5 -> 1
+best 3 796/1471/4/0 731/31998/2/5 405/-952/6/4 -> 1
+best 3 405/224/1/0 405/-1141/6/1 405/1186/5/3 -> 1
+best 3 731/-1452/5/5 731/31751/1/0 796/-311/2/0 -> 0
+best 3 666/31971/4/0 82/-1561/4/1 731/11/1/0 -> 0
+best 3 796/31997/1/1 796/-32001/3/5 796/-31993/5/2 -> 2
+best 3 796/6/6/4 666/-32001/2/2 405/-32001/2/3 -> 0
+best 3 731/-342/6/2 666/-1984/5/5 666/-1058/3/5 -> 0
+best 3 666/92/1/3 405/-20/3/0 731/-1338/5/3 -> 0
+best 3 796/-1812/3/1 731/31693/6/4 731/27/2/0 -> 1
+best 3 405/31701/1/5 666/-31975/1/3 666/766/3/3 -> 1
+best 3 796/-1187/2/4 796/-32001/4/4 796/31995/1/3 -> 2
+best 3 82/171/4/1 405/-32001/3/1 796/-31995/2/0 -> 0
+best 3 731/-1745/1/4 731/-715/2/2 731/31733/3/0 -> 2
+best 3 666/-32001/3/0 405/17/2/2 796/8/5/0 -> 1
+best 3 82/701/2/4 82/-4/2/2 796/-1230/3/4 -> 0
+best 3 405/15/5/0 796/10/2/2 731/31703/3/1 -> 2
+best 3 731/19/3/5 666/273/1/4 666/1024/4/2 -> 2
+best 3 731/4/2/1 731/-11/2/5 731/-3/2/2 -> 0
+best 3 796/699/1/0 796/-1175/2/4 796/-1862/1/5 -> 1
+best 3 405/219/6/2 796/31726/1/5 82/2/5/5 -> 1
+best 4 82/-31717/2/2 796/31741/4/3 82/31980/6/3 405/-19/2/0 -> 2
+best 4 731/962/3/3 796/1160/5/4 796/31976/4/5 731/-31999/3/4 -> 3
+best 4 666/-1738/5/4 405/806/2/0 666/-31721/5/0 796/31720/1/1 -> 3
+best 4 405/-31992/4/3 405/-1403/1/1 82/440/6/3 666/-327/4/4 -> 0
+best 4 796/16/6/0 666/31735/3/0 405/-32001/4/4 731/-31710/6/0 -> 1
+best 4 796/-31985/5/5 405/-31983/1/3 82/-948/4/3 405/1977/5/2 -> 0
+best 4 405/20/1/5 796/10/2/4 731/-5/1/4 796/-19/4/1 -> 3
+best 4 666/31992/5/5 796/4/5/4 82/18/4/3 796/-32001/1/3 -> 0
+best 4 82/31747/4/5 796/31701/2/1 731/31997/1/5 82/-816/6/1 -> 2
+best 4 796/31695/3/3 796/31991/4/1 82/844/3/1 796/31736/1/0 -> 0
+best 4 796/-479/5/2 82/-31999/2/4 82/-729/2/3 666/31751/2/2 -> 1
+best 4 405/-31703/4/3 731/-32001/2/4 405/18/2/4 82/20/6/4 -> 0
+best 4 796/16/6/1 731/-31/5/2 796/-31982/4/3 731/1871/3/0 -> 2
+best 4 666/-5/2/2 405/-31980/6/3 666/-31983/3/1 405/1832/6/1 -> 1
+best 4 796/-1661/1/4 796/-14/5/4 731/31723/5/5 731/-1143/2/4 -> 2
+best 4 405/31711/4/3 731/-32001/6/4 731/-2/3/4 82/4/4/0 -> 0
+best 4 731/-7/4/4 666/31983/2/3 405/-31990/6/4 666/-31734/3/0 -> 2
+best 4 82/-31980/4/5 731/1356/6/3 666/-702/2/1 405/-31991/2/2 -> 3
+best 4 796/257/1/4 796/1263/5/2 731/-1847/5/1 731/-900/6/4 -> 1
+best 4 731/1888/5/1 796/-563/3/4 731/31983/4/1 796/-31695/5/2 -> 3
+best 4 405/31989/5/2 796/-1793/5/4 666/-31722/1/4 796/-32001/3/5 -> 0
+best 4 666/6/6/1 731/-18/1/3 405/-14/2/4 82/-31749/6/1 -> 0
+best 4 731/31739/2/5 731/31989/2/0 796/1056/5/1 796/-691/3/2 -> 0
+best 4 666/-32001/3/0 82/281/4/4 731/31710/5/3 796/9/5/2 -> 2
+best 4 666/-10/4/4 82/3/2/2 731/-8/5/2 82/-18/4/5 -> 3
+best 5 82/1654/5/5 666/-1087/1/4 666/-12/5/4 666/1199/5/3 731/7/1/1 -> 2
+best 5 731/10/3/2 666/12/2/3 796/-31710/5/2 666/-31998/3/4 796/31972/5/3 -> 3
+best 5 666/1875/1/0 405/-31999/1/3 796/-32001/3/4 405/-31693/5/2 796/816/4/2 -> 1
+best 5 666/-19/1/0 731/11/1/4 82/-31744/5/2 405/-31705/1/2 82/10/5/2 -> 2
+best 5 731/5/4/0 731/-1948/2/2 731/-6/3/4 796/1849/2/1 796/31983/2/0 -> 3
+best 5 82/31696/1/5 405/1560/1/1 82/-31997/5/1 82/16/3/3 405/-462/6/3 -> 0
+best 5 666/31980/4/1 405/-31970/4/5 405/17/2/1 405/-32001/6/1 666/31975/6/2 -> 4
+best 5 405/-31695/2/3 731/31694/5/2 796/15/6/3 82/-17/1/3 666/31700/5/3 -> 4
+best 5 731/-32001/2/3 796/-475/2/3 796/1278/4/1 796/-31698/6/4 796/-31994/5/5 -> 4
+best 5 405/31711/2/2 666/-32001/5/4 82/31999/1/0 666/31730/2/0 405/-18/3/4 -> 0
+best 5 82/-31986/5/4 405/-8/6/1 666/-19/5/1 731/-2/3/5 666/-19/1/0 -> 0
+best 5 796/-668/3/0 731/31750/6/2 796/31990/5/2 796/31996/2/3 731/-32001/5/4 -> 3
+best 5 731/31738/3/0 731/-1812/5/3 796/20/2/0 731/-1666/1/0 731/-31722/3/1 -> 1
+best 5 82/-991/2/1 731/580/5/3 666/-31995/1/4 405/31712/6/4 731/-31730/4/1 -> 2
+best 5 405/4/6/4 796/-12/4/1 666/18/2/3 666/-13/3/4 796/31718/6/3 -> 4
+best 5 796/-31995/5/2 731/-31713/1/5 731/-2/5/3 796/-31711/1/5 796/-618/3/5 -> 0
+best 5 731/-31973/4/1 796/-236/5/1 796/-1460/4/3 796/-32001/2/3 405/-2/3/3 -> 1
+best 5 731/1/2/0 82/31720/3/2 666/31984/5/4 405/-32001/2/5 82/31997/2/2 -> 4
+best 5 405/-31752/1/4 405/-31746/4/1 82/-14/3/1 405/31724/6/4 731/31985/5/3 -> 4
+best 5 82/-32001/1/1 82/20/1/3 796/12/5/5 82/0/3/4 82/-10/3/1 -> 3
+best 5 82/1744/4/5 405/-137/4/3 731/-17/3/0 666/-31720/6/2 666/-32001/6/3 -> 3
+best 5 796/-31735/3/0 731/-32001/4/3 731/31724/3/1 731/31733/4/0 731/1053/1/5 -> 3
+best 5 731/-1371/1/5 731/-83/4/2 731/-937/5/0 796/-31994/3/2 796/-32001/6/2 -> 3
+best 5 82/-723/6/1 82/-31980/6/5 731/31970/4/4 796/110/4/1 731/-1985/5/2 -> 1
+best 5 405/16/3/1 82/-32001/6/3 796/9/6/5 666/-8/1/0 796/14/2/4 -> 2
+best 6 82/-12/5/2 405/-14/4/1 731/-9/3/5 666/31993/4/0 666/-1/4/2 796/-31715/6/5 -> 5
+best 6 796/-1303/5/5 82/1834/1/3 82/353/2/1 666/-31997/2/5 796/-1256/3/4 405/-1480/5/2 -> 3
+best 6 405/-1210/6/5 796/-31749/3/1 82/-5/4/4 796/17/1/5 82/534/4/4 666/-31993/2/4 -> 5
+best 6 796/18/6/4 666/31994/6/4 796/780/6/2 405/1943/5/2 405/1511/3/0 731/31994/5/4 -> 1
+best 6 796/-31989/2/4 731/-619/6/4 796/-31697/4/0 796/-179/4/1 731/31975/3/3 796/-775/4/3 -> 0
+best 6 731/1590/5/1 731/-288/4/2 796/31981/4/0 796/-31713/3/3 796/-31726/4/4 731/31712/3/1 -> 4
+best 6 796/17/5/0 405/31700/4/0 82/-31751/4/2 82/-31990/1/1 405/-10/6/0 405/31985/1/4 -> 5
+best 6 405/-1133/3/3 731/31992/2/2 666/31736/1/5 796/-31733/3/4 796/-1872/4/5 796/-1920/4/4 -> 1
+best 6 666/362/1/0 796/-4/5/2 796/-16/4/4 666/-31975/4/5 405/31751/4/0 666/-31726/3/5 -> 3
+best 6 796/-1521/1/1 666/31996/2/4 731/-278/6/0 666/1619/2/5 82/-31737/4/5 82/17/6/1 -> 1
+best 6 82/1709/1/0 666/-32001/3/4 666/1111/3/4 731/-31975/2/3 82/3/1/2 666/-904/5/2 -> 3
+best 6 666/1369/1/0 796/0/3/2 666/-1092/3/3 82/-31982/1/2 405/-32001/5/1 796/31734/1/2 -> 3
+best 6 796/2/3/0 405/-31979/4/5 796/-4/4/5 731/-105/3/3 796/-6/2/4 796/-710/1/5 -> 1
+best 6 796/-17/5/5 405/-11/2/3 731/-31731/4/2 796/31979/5/5 405/31976/1/1 82/2/6/3 -> 3
+best 6 405/139/3/1 796/-31996/1/3 731/31710/5/4 405/-31987/3/4 796/740/6/5 731/31998/1/4 -> 5
+best 6 405/31989/2/1 666/1312/3/0 405/31999/3/1 82/-1269/2/1 666/5/6/1 796/31712/4/5 -> 5
+best 6 405/277/5/3 796/394/1/3 666/1982/4/0 796/1962/2/3 666/31740/2/4 405/-31705/6/5 -> 4
+best 6 82/1348/3/2 796/420/3/5 82/-627/1/1 666/31709/1/4 666/-921/1/1 731/1372/5/4 -> 3
+best 6 796/-31724/4/0 666/-31975/5/1 666/31971/4/3 731/-3/4/0 796/20/4/5 731/-5/4/4 -> 2
+best 6 82/4/5/2 731/31739/3/2 731/6/6/2 796/16/2/1 731/-31747/6/0 405/-31981/2/0 -> 1
+best 6 796/31991/4/5 796/-912/6/2 796/1123/3/5 731/-250/1/2 796/480/6/0 796/31748/2/4 -> 0
+best 6 82/-5/1/5 731/-31991/5/0 731/-32001/3/0 796/9/2/4 731/-31972/6/0 82/-8/6/5 -> 5
+best 6 796/31750/1/0 82/-32001/1/4 796/-32001/5/1 405/-31990/5/0 666/-31974/2/1 82/31734/3/0 -> 0
+best 6 796/31975/4/4 731/-31739/1/2 731/31706/1/1 731/-418/4/5 731/-31982/2/2 796/253/4/5 -> 4
+best 6 731/-610/5/0 796/566/2/2 796/-1054/4/5 796/-32001/2/3 82/1842/2/3 666/-645/3/4 -> 2
+best 7 796/-246/3/4 731/-934/3/1 796/-31994/3/3 731/1876/3/4 796/1656/2/3 731/-31724/1/1 796/-32001/5/2 -> 2
+best 7 731/9/4/5 796/627/1/1 731/1464/5/3 796/31696/3/1 796/-32001/4/1 731/12/6/1 796/1803/2/4 -> 3
+best 7 666/-31732/3/3 796/9/4/2 796/-3/5/3 796/31977/2/2 731/13/2/4 405/16/4/0 666/-31743/2/5 -> 3
+best 7 796/13/4/1 666/9/1/3 731/-31976/3/5 405/31996/2/3 796/10/1/5 731/-31999/6/2 796/31999/6/0 -> 5
+best 7 666/9/4/4 405/-31736/3/0 82/286/6/5 666/-1112/5/1 405/31977/3/3 796/-31698/1/3 405/31983/1/4 -> 6
+best 7 666/31730/5/4 731/1418/5/5 82/6/3/2 666/31973/4/3 731/-31727/4/4 405/31747/1/0 731/-647/5/2 -> 3
+best 7 666/31989/5/5 405/-31696/2/1 666/-31696/4/4 82/-31697/4/5 405/-31732/5/4 82/17/5/2 731/-7/5/4 -> 0
+best 7 666/96/6/3 405/-243/1/4 731/-32001/2/4 405/-31990/6/4 666/31696/6/0 796/681/3/5 731/31698/6/5 -> 3
+best 7 796/-229/2/3 731/-32001/4/1 731/16/3/2 796/-31701/5/4 796/-31708/2/0 796/31987/2/5 796/-1706/3/1 -> 5
+best 7 796/-1486/1/0 731/-12/4/2 666/-9/6/0 731/1623/1/0 405/-157/3/1 731/-32001/1/4 666/-778/6/3 -> 1
+best 7 731/-32001/2/2 796/-31981/3/2 796/-4/6/1 796/-31992/2/5 796/-32001/6/4 796/31732/6/5 796/-1845/4/4 -> 3
+best 7 82/-230/6/5 666/-32001/4/2 731/-31988/1/0 666/-32001/2/4 82/-32001/4/4 666/765/1/5 405/-930/4/5 -> 5
+best 7 666/-32001/4/0 796/31699/2/1 666/-788/6/3 666/31746/6/4 666/1778/6/3 405/-1416/5/5 405/-32001/5/1 -> 3
+best 7 796/-1860/2/3 796/-32001/4/4 731/1277/5/0 796/31983/6/0 731/-31975/2/1 731/-31738/4/1 796/-1726/4/0 -> 3
+best 7 666/-10/6/1 666/-1196/6/3 796/1284/5/0 82/-1417/1/3 666/-1988/3/2 405/31984/6/2 82/252/5/4 -> 5
+best 7 82/-912/2/1 82/1378/3/2 796/-32001/1/4 405/1210/1/3 796/-31976/5/3 82/521/2/5 405/1019/5/0 -> 4
+best 7 731/-31707/6/4 82/31720/2/5 405/-678/6/3 82/-935/3/4 796/1345/6/4 666/31991/6/3 731/-5/4/3 -> 5
+best 7 796/0/5/0 82/-31750/1/3 405/-31983/1/5 405/-1/3/4 796/-10/5/1 796/-5/1/4 82/-31978/5/1 -> 2
+best 7 82/-1592/3/2 666/-1210/3/0 666/844/2/5 796/-1732/5/2 82/-661/3/4 82/31716/3/1 405/31994/1/1 -> 0
+best 7 796/-1/6/4 666/-31706/3/2 796/31697/6/4 82/-5/5/1 796/13/5/1 796/-31701/5/5 82/-6/4/1 -> 1
+best 7 82/-32001/3/4 82/-10/6/2 796/-31701/6/1 405/16/1/1 796/-31728/3/1 731/-5/3/3 666/-11/2/5 -> 3
+best 7 796/-31971/4/3 405/-31970/3/4 666/-31979/6/5 405/-626/2/4 405/-31730/5/2 731/-32001/1/3 731/-31990/6/0 -> 2
+best 7 731/1399/2/2 731/-31972/6/4 731/-31728/6/0 731/640/2/3 796/-32001/1/4 731/408/6/4 731/-117/1/3 -> 1
+best 7 666/-11/1/4 796/-214/3/2 731/-522/5/0 82/-20/2/3 82/-1256/6/4 82/1936/1/1 666/-31706/3/0 -> 4
+best 7 405/-7/6/4 731/-15/4/3 796/0/3/2 82/-18/1/4 796/-6/2/4 82/13/3/1 82/-14/3/5 -> 5
+best 8 731/1907/3/0 731/323/5/5 796/-31984/2/3 796/-31997/3/5 796/20/2/4 731/1366/2/5 731/1899/3/3 731/-32001/1/1 -> 3
+best 8 731/17/4/4 405/817/4/4 666/-31982/2/1 666/-608/6/2 666/31990/4/1 731/31998/1/2 666/1557/6/3 82/-31974/3/4 -> 5
+best 8 666/1811/2/0 731/231/5/5 796/1676/1/2 731/-557/2/2 666/-31993/1/2 731/31982/4/1 405/-31970/5/4 666/31733/2/4 -> 4
+best 8 796/-31702/4/4 796/-31986/6/0 731/-1199/2/1 731/9/2/0 731/-31984/1/5 796/495/5/4 796/31723/3/0 731/-31999/5/4 -> 7
+best 8 405/2/4/4 405/783/1/4 666/-31990/3/5 82/-31991/6/5 731/31973/4/1 731/1085/4/0 405/73/4/0 666/21/3/0 -> 3
+best 8 796/-31972/3/4 796/199/2/5 796/-1983/6/2 796/31711/2/4 796/-31699/1/0 731/-31717/6/1 796/31708/5/1 796/1309/2/3 -> 0
+best 8 666/794/1/3 731/13/1/5 82/-323/3/2 82/1901/5/0 666/-1159/6/3 405/-1309/5/0 82/31711/4/3 405/1484/3/5 -> 6
+best 8 731/31699/5/4 731/-31996/5/1 796/-1014/6/5 731/-32001/1/3 731/1081/1/2 731/-796/4/1 731/1826/3/4 796/-17/2/1 -> 0
+best 8 405/318/2/1 796/-31997/6/2 731/1668/5/4 82/407/4/3 796/-589/6/3 82/-3/6/3 82/-31991/3/4 796/-437/6/3 -> 1
+best 8 405/-31707/2/5 82/20/3/1 666/-31986/1/0 666/31719/4/0 405/230/6/5 666/-31988/3/0 405/-31975/4/4 666/-1428/4/1 -> 6
+best 8 796/860/2/0 731/1592/2/4 731/-31713/2/3 796/31747/4/2 666/-1967/6/4 82/-31976/3/5 666/1883/3/0 731/1979/5/0 -> 5
+best 8 82/-31976/6/1 82/-13/2/4 82/5/5/5 731/31991/6/1 666/-15/3/1 405/-7/2/3 796/3/3/5 666/-31752/4/4 -> 7
+best 8 405/-31740/4/1 82/-31973/5/1 666/1439/4/3 82/31980/1/3 731/31978/4/5 405/-32001/6/2 796/144/1/3 796/-31752/1/0 -> 3
+best 8 796/31701/5/2 731/-31988/1/5 796/1869/3/5 796/-1937/5/4 731/31695/1/4 796/644/3/1 796/-31974/1/2 731/-825/2/0 -> 1
+best 8 796/5/2/4 731/828/3/3 405/31746/2/4 405/-31697/2/1 731/12/1/2 731/33/3/1 405/-31743/2/3 731/-31736/2/2 -> 2
+best 8 666/-31713/1/4 796/1181/6/4 82/-1234/5/1 666/-1247/3/1 405/1421/5/0 796/-1197/6/4 796/-1106/2/2 82/-31712/6/1 -> 0
+best 8 731/-32001/4/5 796/-31983/6/2 666/31977/3/2 666/-31988/1/2 405/-1862/4/0 666/31727/2/2 666/-31997/4/0 796/-32001/1/4 -> 3
+best 8 82/-31745/5/3 82/31986/4/4 82/-31737/1/3 731/9/3/3 82/6/2/5 82/31985/5/5 796/-882/3/3 405/-32001/6/1 -> 1
+best 8 666/-12/5/0 731/-32001/3/5 405/-31997/2/3 796/-11/5/5 666/31705/1/1 796/2/2/5 82/20/1/0 666/31696/5/2 -> 2
+best 8 731/-31971/6/4 796/-31740/3/4 796/31734/1/4 731/31737/6/2 796/7/3/0 731/31983/2/2 796/1430/6/4 731/31725/4/3 -> 5
+best 8 796/1761/6/2 796/-32001/1/0 731/-31738/4/2 405/1800/3/5 731/1361/1/2 405/1274/5/1 666/-31996/1/4 731/-375/2/0 -> 6
+best 8 796/-31997/2/1 796/1561/5/0 796/-1707/2/5 731/-32001/5/4 731/31995/4/3 82/890/5/1 796/31694/6/4 731/-848/5/1 -> 4
+best 8 731/31993/4/3 731/1917/3/0 731/31704/1/3 82/-1866/6/0 731/15/5/0 796/-31997/3/3 796/-31746/6/5 666/-31996/3/5 -> 5
+best 8 796/1161/4/4 731/31751/6/2 796/31999/5/3 796/31999/3/1 731/-31981/5/3 731/380/4/3 731/31972/2/4 796/-32001/2/3 -> 2
+best 8 666/-32001/5/3 666/-31710/4/1 731/-32001/4/0 731/31998/1/4 796/17/4/2 666/-4/1/5 666/13/6/0 666/-7/5/1 -> 3
+best 13 405/0/5/2 796/17/4/0 405/15/2/3 796/-19/1/5 796/-12/5/5 731/-3/6/3 666/-32001/2/4 796/-32001/1/2 405/14/1/0 731/31999/5/1 405/-7/1/4 796/-19/4/5 731/-10/3/2 -> 0
+best 13 796/-31973/2/4 82/508/4/5 796/31973/1/0 666/31724/3/2 796/-993/3/4 731/-1574/4/2 796/-31743/5/0 405/-1448/5/0 82/31726/1/1 82/-31978/6/1 731/-31696/6/1 405/31695/3/1 796/-1263/5/0 -> 0
+best 13 731/-31985/5/3 731/1447/4/2 405/-1177/4/2 405/1769/6/3 731/-254/6/3 666/1538/5/3 82/-32001/5/1 405/-32001/3/2 796/152/2/5 796/984/6/1 666/-31740/5/1 82/31991/3/2 796/-31718/1/0 -> 11
+best 13 796/31741/1/2 731/31995/1/4 796/682/3/5 796/-512/2/2 731/1631/4/4 731/1264/1/1 796/-32001/1/5 796/-1724/1/2 796/31998/1/0 796/-31974/3/2 796/31709/4/4 731/-603/3/5 796/-31736/6/3 -> 1
+best 13 405/-10/2/5 82/31697/4/5 405/-32001/6/5 405/-1451/2/2 82/-31986/4/2 405/-31974/2/5 405/-31990/1/2 731/1710/4/5 731/-1728/1/4 82/8/4/2 405/31720/6/5 731/-31986/1/0 666/31751/6/4 -> 6
+best 13 796/-31705/3/5 731/-31746/4/2 731/-1254/6/0 666/20/2/3 731/31977/4/5 405/-484/5/4 405/1956/3/0 82/31973/6/1 731/-378/2/5 405/1669/3/3 405/-31986/4/4 82/-4/2/0 731/-81/1/2 -> 10
+best 13 731/-3/2/4 731/-31710/3/5 731/-32001/1/2 731/-31994/6/0 796/-12/6/1 796/-277/6/4 731/-32001/2/4 731/-31714/4/5 796/-188/4/0 796/-31996/1/5 731/-31751/5/5 796/1610/2/0 731/-809/1/3 -> 9
+best 13 405/-31991/1/4 405/-31740/3/0 82/-1033/1/1 796/1872/6/5 796/31985/5/2 731/-454/6/2 731/-1537/6/3 731/-31971/4/4 731/31715/1/4 666/-32001/5/4 731/82/6/5 796/-31750/2/1 796/-1835/4/1 -> 0
+best 13 796/-32001/5/0 731/1994/5/4 731/31752/1/5 796/-32001/2/3 731/-31971/2/2 731/1773/3/5 731/13/6/3 731/31979/4/2 796/-799/4/4 731/813/2/5 796/31972/1/3 796/-31746/2/1 731/-495/4/0 -> 7
+best 13 666/-31974/2/1 666/-1525/1/2 731/-31695/2/0 82/-1067/3/5 731/31989/5/1 731/1946/5/2 405/-13/2/5 731/31743/2/5 405/884/5/0 666/-31717/4/3 731/-207/6/1 731/1010/6/2 796/936/4/0 -> 7
+best 13 731/31971/1/5 796/-781/3/4 731/-31971/2/1 796/-31700/2/4 731/-302/3/1 796/-726/4/0 731/-656/2/4 731/-778/5/3 796/-31991/1/2 796/-31710/2/5 731/991/2/3 731/-228/4/3 796/551/5/1 -> 8
+best 13 731/-3/3/0 731/-10/2/5 796/31998/6/2 796/-19/1/5 796/-31704/4/5 666/-10/4/1 731/31978/5/3 82/31718/3/2 666/-12/6/0 666/-4/1/3 666/-19/4/0 666/4/4/3 666/-7/6/1 -> 2
+best 13 796/-12/5/0 731/-31998/6/4 796/-32001/5/0 731/-31971/6/3 796/-326/4/2 796/-31709/6/5 796/-32001/4/4 796/1059/4/0 731/-31744/1/2 796/326/5/3 731/-31737/2/0 796/1241/5/5 731/-31981/2/4 -> 1
+best 13 405/655/6/2 405/11/3/0 666/-31980/5/3 82/31993/5/5 731/-31752/3/2 666/-1063/4/0 405/7/2/5 666/31996/1/2 666/31733/6/1 796/31990/3/2 796/2/3/5 666/-1/1/4 731/1604/6/1 -> 7
+best 13 796/31738/1/5 731/31975/4/4 731/31700/6/3 731/-31703/6/2 82/1203/1/0 405/1966/2/1 731/328/3/4 666/31992/1/1 405/-31750/1/0 405/-721/3/2 731/-32001/6/3 731/957/3/0 405/-31984/5/5 -> 12
+best 13 731/-31748/4/1 731/31699/5/5 796/31979/4/5 796/-3/1/1 796/108/6/3 731/1367/6/0 796/839/5/2 796/502/3/0 731/-691/3/3 731/1826/5/0 796/31722/2/4 796/31974/1/3 796/31981/6/0 -> 2
+best 13 82/-31736/6/0 82/31736/5/4 82/31720/2/5 731/-1866/5/5 731/-32001/1/4 82/86/6/0 796/-32001/1/5 796/-1/3/0 82/-258/3/0 666/20/1/5 796/-8/5/2 731/-32001/1/4 405/1692/5/5 -> 1
+best 13 796/-601/3/1 796/-32001/4/2 796/31713/3/4 666/1543/5/2 731/-390/6/0 731/-32001/5/3 82/-31985/4/1 666/-1896/4/3 731/31981/2/1 731/-553/3/4 82/-31970/5/4 82/-31710/3/3 82/1261/5/2 -> 10
+best 13 731/-10/4/5 82/-7/2/4 405/9/1/5 82/31979/6/4 82/31996/2/2 666/18/4/0 405/9/4/3 731/-31979/6/0 666/-31702/5/0 82/-18/5/1 82/14/1/5 82/31978/1/1 731/-4/1/0 -> 4
+best 13 796/-20/3/1 731/-581/3/2 796/-1606/3/5 731/19/3/3 731/-1182/3/0 796/31703/4/3 731/-729/5/3 731/-20/4/2 796/-32001/1/0 731/166/4/1 731/1326/4/4 796/1309/4/5 796/-224/3/2 -> 5
+best 13 82/-460/1/0 82/10/2/2 82/-657/1/1 666/-1105/3/3 405/585/3/0 731/-31990/2/1 405/31974/2/5 731/-10/6/1 405/-32001/4/0 405/-1229/6/3 796/574/5/2 405/-32001/2/5 405/-798/4/3 -> 6
+best 13 82/31714/2/5 666/-31710/1/2 405/1707/1/2 731/-31749/5/2 82/603/6/2 405/-16/3/3 405/-31741/1/4 731/31978/4/4 666/-32001/2/5 796/-31989/3/2 82/-31993/5/0 405/-1263/4/1 731/-32001/2/2 -> 9
+best 13 796/31972/1/2 796/-1582/3/0 796/-1522/2/0 731/-31987/5/3 82/8/1/5 796/-753/2/3 731/31699/5/5 82/-31972/6/3 666/-32001/1/2 405/31996/6/3 731/-32001/2/5 796/31704/4/3 666/-31979/3/0 -> 9
+best 13 796/-71/3/4 731/31707/4/5 731/-725/6/0 731/-1034/1/1 796/31990/3/1 731/482/2/4 731/-1333/2/2 796/-31751/3/5 731/8/4/4 731/-31724/5/3 731/-32001/1/4 731/-31743/3/1 731/-1213/2/0 -> 7
+best 13 796/1482/1/1 666/1/6/2 796/387/6/1 405/-145/1/4 82/104/6/1 666/31991/1/5 796/-31696/5/0 731/31750/5/2 405/1431/3/1 731/-31970/6/3 82/17/3/5 731/31981/2/1 796/651/2/5 -> 5
+best 32 82/8/6/1 666/-31991/2/0 405/31749/3/1 82/31992/3/1 731/-32001/3/2 666/10/2/1 796/16/5/4 731/31708/4/2 405/-31975/1/1 796/17/3/2 405/-31739/5/1 82/-31750/1/2 405/10/2/5 405/-32001/2/4 796/20/2/4 796/-16/1/4 82/-31744/4/5 666/-31975/4/5 796/18/1/4 405/-31733/5/4 666/-10/5/5 666/-32001/2/5 666/31986/3/3 666/-31998/2/2 82/-31977/2/5 796/20/4/0 82/-11/6/5 405/-31747/5/5 731/6/6/3 405/-31996/6/0 796/12/1/3 666/-7/3/1 -> 23
+best 32 82/-32001/3/1 666/283/4/4 666/80/3/1 82/1806/5/0 666/-249/1/4 82/31700/2/2 82/740/1/1 666/83/3/0 731/31997/3/5 666/1222/5/1 666/-32001/5/1 82/-31975/4/5 82/-795/6/0 796/31972/6/4 405/-2/2/1 405/6/5/0 666/-32001/6/0 666/-623/4/5 731/31980/3/1 82/1691/2/3 405/-32001/5/5 796/1964/1/0 82/-565/1/0 731/425/1/4 796/-32001/4/5 796/31975/2/1 666/-4/5/0 666/31982/6/3 796/31733/6/2 82/-32001/6/2 731/31978/4/1 731/31997/6/2 -> 8
+best 32 666/-31972/4/4 796/-31999/6/1 796/-32001/4/2 796/-9/5/4 796/-31749/3/0 731/-746/2/3 82/31732/3/4 405/31745/4/1 666/454/4/4 796/-32001/2/2 666/31713/3/0 82/-31721/4/3 666/-31710/3/0 666/-31699/2/5 82/-32001/2/0 82/1128/1/5 405/87/6/0 731/684/2/0 666/-31731/4/4 666/-32001/2/0 796/791/2/5 82/-1326/1/1 796/31993/4/5 405/-31740/4/1 796/31738/2/3 796/-32001/6/1 82/31715/2/0 731/-31750/5/3 666/31704/4/2 405/31995/4/5 666/-31970/3/3 666/-32001/6/4 -> 29
+best 32 405/-31750/6/3 731/-32001/5/4 405/10/1/4 731/-31736/3/3 82/-811/4/2 731/426/5/0 405/1893/6/3 731/-32001/1/2 82/-31990/2/0 82/-8/4/2 731/-31998/4/1 666/-10/1/3 405/1921/2/3 82/-31984/3/0 405/-31995/3/1 731/31729/5/3 82/-31697/1/0 666/-244/3/3 666/-31743/1/4 82/-31978/6/3 731/-31721/5/2 666/1985/5/2 405/-31990/5/0 405/1214/5/1 796/1596/4/4 796/944/4/3 405/-31703/3/5 731/-7/5/1 796/-31987/4/0 82/31995/3/4 796/1735/3/1 796/654/4/0 -> 29
+best 32 796/-31991/3/4 796/192/2/3 796/-32001/2/1 731/-32001/4/3 731/-265/3/1 731/31981/5/0 796/-32001/1/2 796/-1460/1/0 731/31989/3/0 731/31978/3/3 796/-11/4/5 731/1048/4/3 731/-31730/2/3 731/-31970/4/2 731/-31704/6/3 796/-32001/5/0 731/-776/1/0 731/-457/4/2 731/-1044/3/4 731/-31991/2/3 731/-1313/4/0 796/-32001/6/4 796/801/2/2 731/-31707/1/1 731/1924/1/2 731/-31727/3/3 731/948/6/3 731/31996/5/2 731/-561/3/0 796/31990/4/3 731/1785/6/3 796/31997/4/2 -> 31
+best 32 796/1724/1/1 796/31974/4/3 405/31710/3/4 796/31726/3/4 731/-748/1/4 731/31748/2/1 666/-32001/1/5 82/31709/2/2 796/-31727/4/2 666/-926/3/0 731/-1295/4/3 405/-1226/4/0 796/-31713/2/0 731/-31982/2/0 796/31973/2/2 796/-31734/5/5 731/-32001/5/0 666/-11/5/3 82/3/5/1 731/228/6/4 666/-1643/2/1 405/1983/3/2 666/-31985/3/2 796/-1064/1/3 731/-31992/6/2 731/-31984/1/5 731/-905/6/5 731/1862/4/5 82/-31728/6/2 82/-1456/4/2 82/7/1/1 796/-986/6/4 -> 24
+best 32 731/31721/2/5 731/-32001/3/5 82/-31724/6/4 796/-31723/1/5 666/-31999/1/4 405/1103/1/1 731/-31695/2/4 731/-1557/5/1 405/-251/6/3 666/31979/2/1 82/-31693/2/1 82/31996/5/5 731/31999/6/2 796/-1458/2/1 82/21/4/1 666/31999/5/4 731/31705/4/4 82/1/5/3 405/-31989/2/2 666/-13/2/0 666/9/2/3 405/16/1/0 405/31990/2/4 82/-649/6/2 731/631/6/1 731/-31973/6/5 666/-32001/1/3 731/31975/2/2 796/1437/6/2 82/-32001/2/2 796/90/3/2 666/-1493/6/2 -> 4
+best 32 731/-1566/3/2 666/31989/5/1 796/-32001/2/0 82/-32001/2/4 82/-13/2/1 405/682/4/0 731/-940/4/4 796/31988/6/1 796/1922/3/2 731/-31737/4/4 796/31726/1/2 666/31978/3/1 405/-14/2/3 666/-1789/3/3 666/-403/5/0 796/31743/4/0 405/-31746/6/4 796/-31974/1/0 731/-19/3/1 731/620/1/2 666/1312/2/3 405/-1938/1/2 82/845/5/5 731/1013/1/3 82/-763/2/1 666/-11/2/4 405/31732/5/1 82/1634/1/5 405/-32001/3/1 82/-32001/5/1 731/-31703/3/5 796/-31702/5/4 -> 16
+best 32 731/-284/3/5 666/-937/2/4 666/-31979/3/3 666/-1073/5/4 666/19/5/5 666/-810/4/3 796/-9/3/3 796/31974/5/1 731/31992/2/4 82/-31698/3/4 666/868/2/0 82/-31988/1/2 731/9/6/4 731/31990/4/1 731/31976/5/3 731/-709/3/3 82/-32001/4/5 796/1708/1/5 666/-2/2/4 796/-31724/6/2 731/11/3/2 666/-1/5/4 82/-31694/5/2 82/-760/3/5 731/-32001/5/5 796/-1454/1/1 82/31995/6/0 82/-31982/2/3 405/31981/6/0 666/-1452/6/3 796/31698/2/0 82/31999/6/0 -> 8
+best 32 666/31992/5/0 405/-31998/6/2 796/2/5/2 82/-18/2/1 731/-5/6/0 405/-11/1/4 82/16/4/3 666/-32001/6/0 666/31997/3/5 731/10/2/2 731/31732/2/3 731/-17/6/3 82/-12/3/2 731/20/3/5 82/-31744/4/2 82/-31992/6/0 796/9/6/2 731/-32001/2/1 666/1/3/3 405/-31728/4/4 405/-31972/4/1 731/31736/2/3 731/-32001/1/4 796/-8/2/4 796/5/4/3 82/31987/6/4 731/-19/4/3 731/19/1/2 731/-14/3/2 666/-11/5/4 731/12/5/4 82/31747/3/5 -> 1
+best 32 82/-31997/3/4 666/-3/6/1 405/-31699/4/2 796/31987/3/3 796/224/5/3 82/-927/5/3 666/-595/5/0 796/-327/5/5 666/-1010/2/0 82/-31987/2/4 405/-1457/4/2 731/31707/1/5 666/-31998/3/5 405/-1527/4/3 82/-32001/2/3 666/-604/5/3 731/-32001/1/2 405/-45/1/0 82/31993/5/5 796/-32001/3/1 82/-31984/1/0 731/-31992/4/1 405/-5/5/5 796/31981/3/3 731/1329/4/1 405/-32001/2/5 405/-20/2/0 796/-31720/4/0 405/-32001/4/1 731/31988/6/5 405/31740/5/0 405/1321/2/5 -> 12
+best 32 666/11/5/2 82/-15/2/0 82/1/4/1 731/-31701/6/0 796/31716/6/0 796/-7/2/4 82/-10/4/5 796/-31729/3/0 82/-31721/4/5 731/-12/6/0 666/-31724/4/1 731/31721/4/1 666/-5/3/3 82/-19/3/1 796/-31974/6/1 666/31978/6/0 796/-7/3/4 666/31720/3/4 82/-31978/1/0 666/-31711/6/1 796/-16/6/1 666/18/6/4 405/13/3/5 405/0/3/5 666/31992/2/2 731/-19/1/4 796/-10/5/1 666/31989/2/1 405/-31981/5/1 796/-31997/6/2 405/31989/6/1 666/-31722/3/0 -> 29
+best 32 731/-31971/4/1 731/-35/6/1 796/-31742/6/3 796/1555/1/0 796/-1750/1/0 796/-32001/6/5 731/-31696/1/1 731/1498/4/3 731/-1/3/4 731/1668/5/2 796/31988/2/4 731/-1210/5/3 796/1011/6/4 731/-5/3/0 731/-31706/3/0 796/776/1/3 796/1651/4/4 731/-32001/4/4 796/-31747/1/1 731/442/5/4 796/-31990/5/1 796/-589/6/3 731/1406/2/0 731/563/1/2 731/31740/5/2 796/-872/6/5 796/-8/6/3 731/31983/4/2 796/55/2/1 796/-1667/3/3 731/-1135/1/5 796/-31978/2/3 -> 10
+best 32 731/684/5/3 796/-32001/6/3 796/-1798/3/0 731/31990/4/0 796/685/1/2 731/31995/5/4 796/-31982/4/3 731/31971/4/1 731/-32001/2/2 731/-4/3/2 796/-1030/5/4 796/-32001/6/3 731/-31979/4/1 731/-408/2/2 796/214/1/4 796/31976/1/2 731/109/4/2 731/31750/3/2 796/8/6/2 731/1015/5/0 731/-32001/2/5 731/-32001/5/3 796/31975/6/4 731/615/5/2 796/31985/2/4 796/31734/3/4 731/-948/2/4 731/-31733/5/5 731/-31749/1/3 796/-390/4/2 731/-8/3/4 796/12/2/1 -> 5
+best 32 796/31712/1/1 731/31995/4/3 731/31725/2/4 796/31733/6/3 731/-13/5/4 796/103/5/4 796/31997/4/4 796/-1034/6/3 731/-31981/4/1 796/592/2/3 731/-938/2/0 731/-31999/3/3 796/-31704/5/0 796/548/3/4 796/399/4/2 796/-32001/1/4 796/31745/5/5 796/-896/3/3 731/31997/3/5 796/-31739/3/0 796/-31986/5/3 796/31989/3/0 796/-32001/3/1 796/-870/2/2 731/-31726/5/4 796/-31715/1/0 796/-31698/3/2 731/-32001/3/2 796/-31992/4/4 796/-18/2/0 731/-557/3/3 731/-1314/1/1 -> 11
+best 32 666/31749/3/1 796/-18/2/0 405/0/4/1 731/-31988/2/2 796/0/5/1 666/31984/4/1 666/19/5/0 666/31724/4/3 796/31737/4/0 405/-17/3/0 405/-31715/4/2 82/10/4/3 731/-31696/5/3 731/16/5/5 82/20/1/2 405/-8/5/5 796/31725/5/5 405/4/4/5 731/-31972/1/0 82/31703/6/1 666/-20/6/1 731/20/6/1 731/31987/1/1 796/-13/1/4 796/31728/2/1 666/31993/6/4 82/-31697/6/1 731/-3/2/5 796/-15/3/1 405/-7/2/5 666/-2/1/2 796/-19/2/4 -> 25
+best 32 731/-18/2/3 796/1/4/0 731/31978/3/2 731/-31752/4/4 796/31986/5/2 796/-797/6/5 796/-31986/3/2 731/7/1/2 731/-31706/5/2 731/741/3/5 796/947/3/3 731/31696/1/0 731/-2/4/5 796/31738/4/3 796/1856/2/4 796/1242/3/5 731/-31729/1/3 796/-31993/2/0 796/174/5/4 796/31987/1/3 731/-501/1/5 731/1304/3/2 731/31973/4/1 796/31742/1/5 796/-4/3/5 796/31993/3/2 731/1278/2/2 796/-32001/1/2 796/31732/6/2 796/-32001/3/2 731/343/3/3 731/-31984/6/5 -> 25
+best 32 82/1/3/3 405/-31693/2/4 666/3/2/0 666/7/3/1 405/-31720/4/4 731/-32001/4/5 731/-4/4/0 796/20/5/2 405/20/2/5 666/1/3/3 731/-32001/4/1 82/12/4/5 82/31981/1/4 666/4/6/0 796/-31992/5/4 82/-14/3/3 731/17/5/2 731/18/2/1 82/31988/5/3 666/7/3/2 405/-32001/2/4 731/8/1/2 405/31726/3/2 666/31710/5/4 731/31993/1/0 796/31984/5/5 796/-10/1/1 796/31740/4/1 796/9/6/2 82/-31696/5/0 796/7/3/2 666/16/2/1 -> 14
+best 32 82/-4/3/5 666/-31978/6/5 796/31980/3/4 796/-32001/5/4 82/14/1/2 405/-31695/5/3 82/-31742/6/2 666/31998/2/1 405/-32001/2/3 796/31696/5/4 666/-4/3/0 666/31991/5/1 731/31731/4/0 405/31975/5/2 796/31723/4/4 666/14/5/5 666/-31975/3/5 82/-12/4/4 405/15/5/2 666/31991/3/3 405/31739/5/4 82/-31725/2/3 405/-11/1/1 82/11/3/4 796/13/1/2 405/-31973/4/2 796/-31977/3/4 405/14/1/2 82/-31734/5/4 405/31989/2/0 666/-32001/6/1 82/31717/2/2 -> 19
+best 32 731/17/5/3 731/31707/1/1 731/-1653/6/2 796/335/2/4 796/-1936/2/4 796/-32001/4/5 796/-31976/1/3 731/31975/2/3 731/-31975/4/5 731/31997/1/4 796/766/1/2 731/31981/2/3 796/-31742/3/2 796/-20/4/0 796/31981/1/4 731/-31973/3/5 731/31709/1/3 731/-1813/2/5 731/-1828/2/2 731/1047/6/3 796/19/1/0 796/31749/4/5 796/1927/5/1 796/-497/1/0 731/43/6/1 796/31733/6/0 731/-32001/6/2 731/31748/3/5 731/31995/1/1 731/-1229/2/0 796/-31696/2/1 731/31983/4/3 -> 9
+best 32 731/31982/6/4 731/-31752/3/5 731/375/5/1 796/-31988/4/4 731/31990/6/0 796/31699/2/1 731/9/6/4 796/-1173/1/4 796/31991/4/4 731/-1124/1/4 796/31705/6/5 731/-369/4/0 796/-758/3/1 731/-31714/2/1 731/72/4/3 796/2/5/0 731/1006/1/0 796/-31995/4/1 796/597/6/5 731/-1894/1/1 796/31737/5/0 731/-32001/6/2 796/-1677/2/0 731/11/4/2 796/-31970/1/2 731/1439/5/1 796/31699/6/2 796/6/3/1 731/-788/3/2 731/-14/4/4 796/1540/3/3 731/-31998/3/3 -> 31
+best 32 731/31721/3/4 796/31974/2/3 405/-14/1/3 796/-31735/4/5 731/-32001/3/5 666/31989/6/0 405/31726/3/1 731/10/5/2 666/-31975/6/0 82/-31971/6/2 405/-31981/6/3 796/-32001/3/5 666/-217/6/1 82/31746/3/0 731/-31999/1/0 405/-1085/1/4 405/-1231/4/1 82/-1519/5/5 405/31993/4/0 666/1372/6/0 796/-1499/5/0 405/-148/5/1 731/31695/1/5 731/728/3/0 405/169/6/1 82/31745/1/2 796/362/6/2 796/-32001/2/5 796/-32001/2/1 731/-1140/5/3 405/31745/3/4 731/-380/4/5 -> 10
+best 32 731/-31710/5/4 731/-31703/5/4 796/-27/2/5 731/2/4/5 731/31731/4/0 731/507/4/1 731/31745/2/3 731/-12/5/0 731/31971/2/4 796/8/2/2 796/-32001/1/1 796/-83/4/1 796/886/5/5 796/-32001/5/5 731/31704/6/1 731/-32001/2/2 731/-32001/6/2 796/464/4/2 796/-32001/2/5 796/-15/3/0 731/31704/6/0 731/-1401/5/2 796/1386/1/2 796/987/6/2 731/458/4/5 731/-32001/2/3 796/31986/5/3 731/261/1/5 796/31750/3/0 731/-32001/2/0 796/-32001/6/5 796/-32001/4/0 -> 26
+best 32 731/31723/1/2 731/-32001/6/3 731/-31978/5/5 796/6/5/0 731/31973/5/3 731/1463/5/4 796/-775/6/3 731/-17/6/5 796/-784/6/3 796/586/2/2 796/-31738/6/1 731/1699/4/0 796/1232/6/1 796/-32001/3/1 796/-910/1/5 731/-32001/6/2 731/31722/1/5 731/-31700/4/4 731/-32001/6/1 731/-1333/6/3 731/-31721/6/1 731/411/1/2 796/-31987/6/2 796/31724/5/0 731/-1003/1/1 796/-31971/1/1 796/104/3/1 796/-1030/3/1 796/-31970/4/2 796/-31747/3/0 731/-32001/4/4 731/1529/5/0 -> 22
+best 32 796/-549/4/3 796/-859/5/4 796/594/1/3 731/-32001/3/1 796/921/1/5 731/-1738/6/2 731/-31995/4/1 731/908/3/5 731/31994/5/3 796/-357/4/2 796/-1907/3/5 796/-32001/4/4 731/-31985/3/5 796/-31977/5/4 731/31974/5/2 796/-32001/1/4 796/-1437/2/4 731/31983/4/0 731/-31986/6/4 731/521/2/1 731/1665/6/3 796/31982/4/1 731/1129/2/0 731/-31700/5/1 731/-158/2/0 731/-32001/5/4 731/892/2/4 796/-13/4/3 731/-32001/1/2 731/-31975/4/3 796/1682/3/5 731/-32001/3/0 -> 8
+best cases 40000 digest C041050586F92187

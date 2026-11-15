@@ -14,8 +14,12 @@
 //! The digest of the trace (`trace_digest`) is defined over the values of the
 //! fields, not over memory, so it does not depend on the byte order.
 
-use std::sync::atomic::{AtomicI16, AtomicU16, AtomicU32, AtomicU8, Ordering::Relaxed};
+#[cfg(not(all(target_has_atomic = "64", not(feature = "counter32"))))]
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicI16, AtomicU16, AtomicU8, Ordering::Relaxed};
+use std::sync::Arc;
 
+use crate::thread::ThreadPool;
 use crate::types::*;
 
 pub const DEPTH_UNSEARCHED: Depth = -2;
@@ -90,25 +94,72 @@ impl TTEntry {
 }
 
 /// `Cluster`: the packed 21-bit keys of the three entries, then the entries.
+///
+/// The keys word is read and written whole, as C++'s `RelaxedAtomic<u64>`:
+/// the key of the middle entry spans both of its 32-bit halves, so a reader
+/// seeing the new low half with the old high half would see a key nobody
+/// wrote, a false hit (Sol's review of layer 9). On targets with 64-bit
+/// atomics (x86-64, i586 with `cmpxchg8b`, ARMv7) it is an `AtomicU64`. On
+/// 32-bit PowerPC, which has none, it is two halves read and written under
+/// one of 64 spin locks chosen by the cluster's address, which is what C++'s
+/// `std::atomic<u64>` is there (a lock of libatomic); the feature
+/// `counter32` selects that form on any target, to test it.
 #[derive(Default)]
 pub struct Cluster {
+    #[cfg(all(target_has_atomic = "64", not(feature = "counter32")))]
+    keys: std::sync::atomic::AtomicU64,
+    #[cfg(not(all(target_has_atomic = "64", not(feature = "counter32"))))]
     keys_lo: AtomicU32,
+    #[cfg(not(all(target_has_atomic = "64", not(feature = "counter32"))))]
     keys_hi: AtomicU32,
     entry: [TTEntry; CLUSTER_SIZE],
 }
 
 const _: () = assert!(std::mem::size_of::<Cluster>() == 32, "Suboptimal Cluster size");
 
+#[cfg(all(target_has_atomic = "64", not(feature = "counter32")))]
 impl Cluster {
     #[inline(always)]
     fn keys(&self) -> u64 {
-        self.keys_lo.load(Relaxed) as u64 | ((self.keys_hi.load(Relaxed) as u64) << 32)
+        self.keys.load(Relaxed)
     }
 
     #[inline(always)]
     fn set_keys(&self, k: u64) {
+        self.keys.store(k, Relaxed);
+    }
+}
+
+/// The locks of the keys words without 64-bit atomics.
+#[cfg(not(all(target_has_atomic = "64", not(feature = "counter32"))))]
+static KEY_LOCKS: [std::sync::atomic::AtomicBool; 64] = [const { std::sync::atomic::AtomicBool::new(false) }; 64];
+
+#[cfg(not(all(target_has_atomic = "64", not(feature = "counter32"))))]
+impl Cluster {
+    #[inline(always)]
+    fn lock(&self) -> &'static std::sync::atomic::AtomicBool {
+        use std::sync::atomic::Ordering::Acquire;
+        let l = &KEY_LOCKS[(self as *const Cluster as usize >> 5) & 63];
+        while l.compare_exchange_weak(false, true, Acquire, Relaxed).is_err() {
+            std::hint::spin_loop();
+        }
+        l
+    }
+
+    #[inline(always)]
+    fn keys(&self) -> u64 {
+        let l = self.lock();
+        let k = self.keys_lo.load(Relaxed) as u64 | ((self.keys_hi.load(Relaxed) as u64) << 32);
+        l.store(false, std::sync::atomic::Ordering::Release);
+        k
+    }
+
+    #[inline(always)]
+    fn set_keys(&self, k: u64) {
+        let l = self.lock();
         self.keys_lo.store(k as u32, Relaxed);
         self.keys_hi.store((k >> 32) as u32, Relaxed);
+        l.store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -159,11 +210,37 @@ impl TranspositionTable {
         TranspositionTable { table: table.into_boxed_slice(), generation8: AtomicU8::new(0) }
     }
 
-    /// `clear()`: every entry to zero and the generation to 0. C++ shares the
-    /// work between the search threads; with one thread it is one loop.
+    /// `clear()`: every entry to zero and the generation to 0, by the
+    /// threads of the pool, each zeroing its part of the table, as in C++
+    /// (one NUMA node: thread i clears part i).
+    pub fn clear_with(self: &Arc<Self>, threads: &ThreadPool) {
+        self.generation8.store(0, Relaxed);
+        let thread_count = threads.num_threads();
+
+        for i in 0..thread_count {
+            let tt = self.clone();
+            threads.run_on_thread(i, move |_| {
+                // Each thread will zero its part of the hash table
+                let stride = tt.table.len() / thread_count;
+                let start = stride * i;
+                let len = if i + 1 != thread_count { stride } else { tt.table.len() - start };
+                tt.zero(start, len);
+            });
+        }
+
+        for i in 0..thread_count {
+            threads.wait_on_thread(i);
+        }
+    }
+
+    /// `clear()` on the calling thread alone (the drivers have no pool).
     pub fn clear(&self) {
         self.generation8.store(0, Relaxed);
-        for c in self.table.iter() {
+        self.zero(0, self.table.len());
+    }
+
+    fn zero(&self, start: usize, len: usize) {
+        for c in &self.table[start..start + len] {
             c.set_keys(0);
             for e in &c.entry {
                 e.depth8.store(0, Relaxed);
@@ -173,6 +250,22 @@ impl TranspositionTable {
                 e.eval16.store(0, Relaxed);
             }
         }
+    }
+
+    /// The bytes of the table that are not zero, as the bytes of the C++
+    /// clusters (for the drivers: a cleared table has none).
+    pub fn nonzero_bytes(&self) -> usize {
+        let nz = |v: u64, bytes: u32| (0..bytes).filter(|i| (v >> (8 * i)) & 0xFF != 0).count();
+        let mut n = 0;
+        for c in self.table.iter() {
+            n += nz(c.keys(), 8);
+            for e in &c.entry {
+                n += nz(e.depth8.load(Relaxed) as u64, 1) + nz(e.gen_bound8.load(Relaxed) as u64, 1);
+                n += nz(e.move16.load(Relaxed) as u64, 2) + nz(e.value16.load(Relaxed) as u16 as u64, 2);
+                n += nz(e.eval16.load(Relaxed) as u16 as u64, 2);
+            }
+        }
+        n
     }
 
     pub fn cluster_count(&self) -> usize {
@@ -432,5 +525,42 @@ mod tests {
         assert_eq!(tt.generation(), 1);
         tt.clear();
         assert_eq!(tt.generation(), 0);
+    }
+
+    #[test]
+    fn keys_are_never_torn() {
+        // The middle key spans the two halves of the keys word: one writer
+        // alternates it between 1 and 0x800 (which differ in both halves),
+        // readers must only see the two words written (Sol's review)
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+        use std::sync::Arc;
+        let tt = Arc::new(TranspositionTable::new(1));
+        let a = 2 | (1 << KEY_BITS) | (3 << (2 * KEY_BITS));
+        let b = 2 | (0x800 << KEY_BITS) | (3 << (2 * KEY_BITS));
+        tt.table[7].set_keys(a);
+        let done = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicUsize::new(0));
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let (tt, done, started) = (tt.clone(), done.clone(), started.clone());
+                std::thread::spawn(move || {
+                    started.fetch_add(1, Relaxed);
+                    while !done.load(Relaxed) {
+                        let k = tt.table[7].keys();
+                        assert!(k == a || k == b, "torn keys word {k:#x}");
+                    }
+                })
+            })
+            .collect();
+        while started.load(Relaxed) < 2 {
+            std::thread::yield_now();
+        }
+        for i in 0..2_000_000 {
+            tt.table[7].set_keys(if i % 2 == 0 { b } else { a });
+        }
+        done.store(true, Relaxed);
+        for r in readers {
+            r.join().unwrap();
+        }
     }
 }

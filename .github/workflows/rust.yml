@@ -62,6 +62,9 @@ jobs:
       - name: cargo clippy --features magic32
         if: always()
         run: cargo clippy --all-targets --locked --features magic32 -- -D warnings
+      - name: cargo clippy --features counter32,thread_idx_offset
+        if: always()
+        run: cargo clippy --all-targets --locked --features counter32,thread_idx_offset -- -D warnings
 
   native:
     name: x86-64
@@ -84,6 +87,10 @@ jobs:
       # default binary, which the steps below check
       - name: cargo test --features magic32
         run: cargo test --release --locked --features magic32 --target-dir target/magic32
+      # the node counters in two 32-bit halves, as on the 32-bit targets
+      # (src/misc.rs, RelaxedCounter)
+      - name: cargo test --features counter32
+        run: cargo test --release --locked --features counter32 --target-dir target/counter32 misc
 
       # nnue and eval need the network: the port looks for it in the working
       # directory, rust/, from which the harness runs every target
@@ -186,6 +193,74 @@ jobs:
           REF=$PWD/../src/stockfish ./search_check.sh clock-record clock-expected
           for f in clock-expected/*.jsonl; do cmp "$f" "tests/search/$(basename "$f")"; done
           ./search_check.sh clock target/release/stockfish
+      # Threads (README.md, "Threads"). What does not depend on timing, against
+      # the C++ engine built above: the sizes and masks of the shared
+      # histories, the part each thread clears, the tables after the pool
+      # clears them with 1 to 8 threads, get_best_thread() on 40,000 synthetic
+      # results; threads_check.expected keeps the C++ output for the emulated
+      # targets
+      - name: Thread pool, C++ against Rust
+        run: |
+          ARCH=x86-64-sse41-popcnt bench/build_threads_check.sh
+          cargo build --release --locked --example threads_check
+          target/cpp/threads_check > threads-cpp.txt
+          target/release/examples/threads_check > threads-rust.txt
+          wc -l threads-cpp.txt
+          cmp threads-cpp.txt threads-rust.txt
+          cmp threads-cpp.txt threads_check.expected
+      # One thread searching as thread k (k = 1 to 7) in the port and in the
+      # C++ engine patched alike: the values derived from the thread index
+      - name: Thread index, against the C++ engine patched alike
+        timeout-minutes: 30
+        run: |
+          # (the Makefile needs ../scripts next to src/)
+          rm -rf "$RUNNER_TEMP/idx" && mkdir "$RUNNER_TEMP/idx"
+          cp -r ../src ../scripts "$RUNNER_TEMP/idx/"
+          patch -d "$RUNNER_TEMP/idx/src" -p2 < bench/thread_idx_offset.patch
+          make -C "$RUNNER_TEMP/idx/src" -j4 ARCH=x86-64-sse41-popcnt build > /dev/null
+          bench/thread_idx_check.sh "$RUNNER_TEMP/idx/src/stockfish" | tee idx-cpp.txt
+          cmp idx-cpp.txt thread_idx.expected
+          cargo build --release --locked --features thread_idx_offset --target-dir target/idx
+          bench/thread_idx_check.sh $PWD/target/idx/release/stockfish | cmp - thread_idx.expected
+      # Nothing left over from a larger pool: the whole trace sample over UCI
+      # after searches with 4 and 3, then 8, 2 and 5 threads
+      - name: Trace sample after a larger pool
+        timeout-minutes: 10
+        run: |
+          python3 bench/after_resize.py target/release/stockfish
+          python3 bench/after_resize.py --pool 8,2,5 target/release/stockfish
+      # Random GUI sessions with 1 to 8 threads, stops, ponderhits, quits,
+      # every answer checked, every wait with a deadline (a hang fails); the
+      # debug build (overflow and bounds checks, the ported asserts); the
+      # counters in two halves
+      - name: Stress, release build
+        timeout-minutes: 10
+        run: |
+          cargo build --release --locked --example uci_stress
+          target/release/examples/uci_stress --seconds 240 --seed ${{ github.run_number }} target/release/stockfish
+      - name: Stress, debug build
+        timeout-minutes: 15
+        run: target/release/examples/uci_stress --seconds 240 --slow 6 --seed ${{ github.run_number }} target/debug/stockfish
+      - name: Stress, counter32
+        timeout-minutes: 10
+        run: |
+          cargo build --release --locked --features counter32 --target-dir target/counter32
+          ./search_check.sh bench target/counter32/release/stockfish
+          target/release/examples/uci_stress --seconds 120 --seed ${{ github.run_number }} target/counter32/release/stockfish
+      # tests/instrumented.py against the port, with 1 and 4 threads, the
+      # cases that need what is not ported skipped (export_net, NUMA; no
+      # Syzygy tables downloaded): README.md, "Threads", "instrumented.py".
+      # (--sanitizer-thread only sets Threads to 4 here: no ThreadSanitizer.)
+      - name: tests/instrumented.py
+        timeout-minutes: 20
+        run: |
+          ln -sf ../../../src/nn-18cd32e11a9c.nnue target/release/
+          ln -sf stockfish target/release/stockfish-trace
+          for mode in --none --sanitizer-thread; do
+            python3 ../tests/instrumented.py --no-syzygy --keep-going \
+              --skip TestCLI.test_network_equals_base --skip TestInteractive.test_verify_nnue_network \
+              --skip 'TestInvalidOptions.test_numa_*' $mode target/release/stockfish
+          done
       - name: Move picker, movepick_check.expected is the C++ output
         run: EXE=target/cpp/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
       - name: Move picker with magic32
@@ -391,6 +466,23 @@ jobs:
         run: RUN_PREFIX="$RUNNER" ./search_check.sh clock $EXE
       - name: Bench signature (emulated)
         run: RUN_PREFIX="$RUNNER" ./search_check.sh bench $EXE
+      # Threads (README.md, "Threads"): the deterministic parts against the C++
+      # output kept in threads_check.expected; the trace sample after a larger
+      # pool (part of it); a short stress run (the node counters are two
+      # 32-bit halves on these targets: 32-bit PowerPC has no 64-bit atomics)
+      - name: Thread pool against the C++ driver (emulated)
+        run: |
+          cargo build --release --locked --example threads_check
+          $RUNNER target/$TARGET/release/examples/threads_check | cmp - threads_check.expected
+      - name: Trace sample after a larger pool (emulated)
+        timeout-minutes: 20
+        run: RUN_PREFIX="$RUNNER" python3 bench/after_resize.py --light --sessions 12 --timeout 900 $EXE
+      - name: Stress (emulated)
+        timeout-minutes: 25
+        run: |
+          cargo build --release --locked --example uci_stress --target x86_64-unknown-linux-gnu
+          RUN_PREFIX="$RUNNER" target/x86_64-unknown-linux-gnu/release/examples/uci_stress \
+            --seconds 300 --slow 40 --light --threads 1,2,3,4,5 --hash 1,2 --seed ${{ github.run_number }} $EXE
       - name: Perft (emulated), depth ${{ matrix.perft_depth }} at most
         run: |
           printf '#!/bin/sh\nexec %s %s "$@"\n' "$RUNNER" "$EXE" > emulated

@@ -23,6 +23,15 @@ magic32 = []
 # Do the doubles of time management in software on every target (src/fp.rs),
 # as the i586 targets do, to test that path.
 softfloat = []
+# Keep the node counters of the search threads in two 32-bit halves on every
+# target, as the 32-bit targets do (src/misc.rs, RelaxedCounter), to test
+# that path natively.
+counter32 = []
+# Add the value of the environment variable SF_THREAD_IDX_OFFSET to the index
+# of each thread where the search depends on it, to compare a single thread
+# searching as thread k with the C++ engine patched alike
+# (bench/thread_idx_offset.patch).
+thread_idx_offset = []
 
 [profile.release]
 opt-level = 3

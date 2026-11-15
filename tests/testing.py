@@ -14,7 +14,6 @@ import queue
 import threading
 import tempfile
 import shutil
-import requests
 
 CYAN_COLOR = "\033[36m"
 GRAY_COLOR = "\033[2m"
@@ -75,6 +74,8 @@ class Syzygy:
 
     @staticmethod
     def download_syzygy():
+        import requests  # only here: the other tests need no third-party module
+
         if not os.path.isdir(os.path.join(PATH, "syzygy")):
             url = "https://api.github.com/repos/niklasf/python-chess/tarball/9b9aa13f9f36d08aadfabff872882f4ab1494e95"
             file = "niklasf-python-chess-9b9aa13"

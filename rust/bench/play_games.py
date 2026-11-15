@@ -11,9 +11,12 @@ Needs python-chess: run it with the shared folder's Python
 ($STOCKFISH_SHARED/venv/bin/python); nothing is to be installed.
 
     play_games.py [--games N] [--time S] [--inc S] [--ponder] [--plies P]
+                  [--threads T] [--ref-threads T] [--ref-name NAME]
 
 EXE is the port, REF the reference (default: the shared folder's
-oracle/stockfish).
+oracle/stockfish); --threads and --ref-threads set their Threads (1 by
+default), and --ref-name names REF in the report (with REF the port itself,
+for a match of the port against itself with other options).
 """
 
 import argparse
@@ -76,16 +79,20 @@ def main():
     ap.add_argument("--inc", type=float, default=0.1)
     ap.add_argument("--plies", type=int, default=8)
     ap.add_argument("--ponder", action="store_true")
+    ap.add_argument("--threads", type=int, default=1)
+    ap.add_argument("--ref-threads", type=int, default=1)
+    ap.add_argument("--ref-name", default="C++")
     args = ap.parse_args()
     exe = os.environ.get("EXE") or sys.exit("EXE must name the port")
     ref = os.environ.get("REF", os.path.join(S, "oracle", "stockfish"))
 
     port = chess.engine.SimpleEngine.popen_uci(exe)
     cpp = chess.engine.SimpleEngine.popen_uci(ref)
-    for e in (port, cpp):
-        e.configure({"Threads": 1, "Hash": 16})
-    score = {"port": 0.0, "C++": 0.0}
-    faults = {who: {"time": 0, "illegal": 0, "crash": 0, "error": 0} for who in ("port", "C++")}
+    port.configure({"Threads": args.threads, "Hash": 16})
+    cpp.configure({"Threads": args.ref_threads, "Hash": 16})
+    ref_name = args.ref_name
+    score = {"port": 0.0, ref_name: 0.0}
+    faults = {who: {"time": 0, "illegal": 0, "crash": 0, "error": 0} for who in ("port", ref_name)}
     played = 0
     ops = list(openings(args.plies))
     for g in range(args.games):
@@ -97,18 +104,18 @@ def main():
         played += 1
         pw = {"1-0": 1.0, "0-1": 0.0}.get(result, 0.5)
         score["port"] += pw if port_white else 1 - pw
-        score["C++"] += 1 - pw if port_white else pw
+        score[ref_name] += 1 - pw if port_white else pw
         if loser is not None:
             key = reason.split()[0].rstrip(":")
-            who = "port" if (loser == chess.WHITE) == port_white else "C++"
+            who = "port" if (loser == chess.WHITE) == port_white else ref_name
             faults[who][{"time": "time", "illegal": "illegal", "crash": "crash"}.get(key, "error")] += 1
             reason += f" ({who})"
         print(f"game {g + 1}: port {'white' if port_white else 'black'}: {result} {reason}, "
               f"{time.time() - t:.0f} s", flush=True)
     port.quit()
     cpp.quit()
-    print(f"{played} games at {args.time:g}+{args.inc:g} s{' with ponder' if args.ponder else ''}: "
-          f"port {score['port']:g}, C++ {score['C++']:g}")
+    print(f"{played} games at {args.time:g}+{args.inc:g} s{' with ponder' if args.ponder else ''}, "
+          f"Threads {args.threads} against {args.ref_threads}: port {score['port']:g}, {ref_name} {score[ref_name]:g}")
     for who, f in faults.items():
         print(f"  {who}: losses on time {f['time']}, illegal moves {f['illegal']}, crashes {f['crash']}, "
               f"other errors {f['error']}")

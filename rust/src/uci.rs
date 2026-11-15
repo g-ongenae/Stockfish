@@ -205,7 +205,13 @@ impl UciEngine {
             b"ucinewgame" => self.engine.search_clear(),
             b"setoption" => self.setoption(tokens),
             b"position" => self.position(tokens),
-            b"go" => self.go(tokens),
+            b"go" => {
+                // send info strings after the go command is sent for old
+                // GUIs and python-chess (C++ also sends the NUMA
+                // configuration, "Available processors: ...", not ported)
+                println!("info string {}", self.engine.thread_allocation_information_as_string());
+                self.go(tokens)
+            }
             b"bench" => self.bench(tokens),
             b"dump" => self.dump(tokens.next()),
             b"dumpline" => {
@@ -214,6 +220,12 @@ impl UciEngine {
                 self.dump_line(&tokens.rest[start..]);
             }
             b"searchtrace" => self.search_trace(tokens),
+            // Add custom non-UCI commands, mainly for debugging purposes.
+            b"flip" => {
+                if let Err(e) = self.engine.pos.flip() {
+                    self.terminate_on_critical_error(e.what());
+                }
+            }
             b"d" => {
                 let _ = writeln!(
                     io::stdout().lock(),
@@ -256,7 +268,9 @@ impl UciEngine {
         }
         let name = String::from_utf8_lossy(&name).into_owned();
         let value = String::from_utf8_lossy(&value).into_owned();
-        self.engine.setoption(&name, &value);
+        if let Some(info) = self.engine.setoption(&name, &value) {
+            println!("info string {info}");
+        }
     }
 
     fn position<'a>(&mut self, mut tokens: impl Iterator<Item = &'a [u8]>) {
