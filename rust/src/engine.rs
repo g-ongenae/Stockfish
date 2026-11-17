@@ -9,9 +9,11 @@ use std::sync::{Arc, Mutex};
 use crate::history::SharedHistories;
 use crate::nnue::network::EVAL_FILE_DEFAULT_NAME;
 use crate::nnue::Network;
+use crate::numa::NumaState;
 use crate::position::{Position, PositionSetError};
 use crate::search::*;
 use crate::searchtrace::{self, json_string, parse_session, trim, SearchTraceWindow, SearchTracer};
+use crate::sync_println;
 use crate::thread::ThreadPool;
 use crate::timeman::now;
 use crate::tt::TranspositionTable;
@@ -22,17 +24,31 @@ use crate::ucioption::{OptionsMap, UciOption};
 /// `MaxHashMB`: the largest hash the option accepts.
 pub const MAX_HASH_MB: i64 = if cfg!(target_pointer_width = "64") { 33554432 } else { 2048 };
 
+/// `MaxThreads`: max(1024, 4 × `hardware_concurrency()`).
+pub fn max_threads() -> i64 {
+    1024.max(4 * crate::numa::system_threads_nb() as i64)
+}
+
 pub struct Engine {
     pub pos: Position,
     pub options: OptionsMap,
     pub threads: ThreadPool,
     tt: Arc<TranspositionTable>,
-    /// The network and the `EvalFile` value it was read for. Read on first
-    /// use rather than embedded (see README.md, "The network").
+    /// The network and the name it was loaded for (C++'s
+    /// `EvalFile::current`). Read from a file rather than embedded (see
+    /// README.md, "The network"), on first use rather than at start-up.
     network: Option<(Vec<u8>, Arc<Network>)>,
-    /// Whether the loaded network has been announced (`info string NNUE
-    /// evaluation using ...`) or its failure reported, by verify_network().
-    network_verified: bool,
+    /// Whether the load C++ makes at start-up (the default network) has
+    /// been made.
+    initial_network_tried: bool,
+    /// Where the network is looked for after the working directory: the
+    /// directory of `argv[0]` (`CommandLine::get_binary_directory`).
+    binary_directory: std::path::PathBuf,
+    /// Whether verify_network() prints (C++'s `onVerifyNetwork` listener,
+    /// silenced by `speedtest`).
+    pub verify_output: bool,
+    /// What NumaPolicy prints (no thread is bound: see numa.rs).
+    pub numa: NumaState,
     update_context: Arc<UpdateContext>,
 }
 
@@ -53,8 +69,7 @@ impl Engine {
         let mut pos = Position::new();
         pos.set(START_FEN.as_bytes(), false).expect("start position");
 
-        let hw = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as i64;
-        let max_threads = 1024.max(4 * hw);
+        let max_threads = max_threads();
 
         let mut options = OptionsMap::default();
         options.add(UciOption::string("Debug Log File", ""));
@@ -89,7 +104,10 @@ impl Engine {
             // (made by set_tt_size(), from resize_threads(), as in C++)
             tt: Arc::new(TranspositionTable::new(0)),
             network: None,
-            network_verified: false,
+            initial_network_tried: false,
+            binary_directory: binary_directory(std::env::args_os().next()),
+            verify_output: true,
+            numa: NumaState::new(),
             update_context: Arc::new(default_update_context()),
         };
         e.resize_threads();
@@ -106,6 +124,21 @@ impl Engine {
     pub fn setoption(&mut self, name: &str, value: &str) -> Option<String> {
         self.wait_for_search_finished();
         match self.options.setoption(name, value) {
+            Some("Debug Log File") => crate::io::start_logger(self.options.string("Debug Log File").as_bytes()),
+            Some("NumaPolicy") => {
+                let o = self.options.string("NumaPolicy").to_string();
+                if !self.numa.set_config_from_option(&o) {
+                    return Some(format!("NumaPolicy: invalid value '{o}', keeping previous config."));
+                }
+                // Force reallocation of threads in case affinities need to
+                // change
+                self.resize_threads();
+                return Some(format!(
+                    "{}\n{}",
+                    self.numa_config_information_as_string(),
+                    self.thread_allocation_information_as_string()
+                ));
+            }
             Some("Threads") => {
                 self.resize_threads();
                 return Some(self.thread_allocation_information_as_string());
@@ -120,6 +153,8 @@ impl Engine {
             Some("EvalFile") => {
                 self.threads.clear();
                 self.load_network();
+                self.numa.prepare_replicas();
+                self.numa.ensure_replicated(self.threads.size());
             }
             Some("SyzygyPath") => {
                 if !self.options.string("SyzygyPath").is_empty() {
@@ -138,16 +173,37 @@ impl Engine {
         let network = self.network.as_ref().map(|(_, n)| n.clone());
         let requested = self.options.int("Threads") as usize;
         self.threads.set(requested, &self.tt, network, self.update_context.clone());
+        self.numa.set_threads(self.options.string("NumaPolicy"), requested);
+        if !self.numa.binding_possible() {
+            std::process::exit(1);
+        }
 
         // Reallocate the hash with the new threadpool size
         self.set_tt_size(self.options.int("Hash") as usize);
+        self.numa.ensure_replicated(self.threads.size());
     }
 
-    /// `thread_allocation_information_as_string()`: one NUMA node, no
-    /// binding (see README.md, "Threads").
+    /// `thread_allocation_information_as_string()`, with the binding C++
+    /// would make (the port binds nothing: see numa.rs).
     pub fn thread_allocation_information_as_string(&self) -> String {
         let n = self.threads.size();
-        format!("Using {n} {}", if n > 1 { "threads" } else { "thread" })
+        let mut s = format!("Using {n} {}", if n > 1 { "threads" } else { "thread" });
+        let bound = self.numa.thread_binding_information();
+        if !bound.is_empty() {
+            s += " with NUMA node thread binding: ";
+            s += &bound;
+        }
+        s
+    }
+
+    /// `numa_config_information_as_string()`.
+    pub fn numa_config_information_as_string(&self) -> String {
+        format!("Available processors: {}", self.numa.config)
+    }
+
+    /// `thread_binding_information_as_string()`.
+    pub fn thread_binding_information_as_string(&self) -> String {
+        self.numa.thread_binding_information()
     }
 
     /// `set_tt_size()`: a new table of `mb` MiB, cleared.
@@ -219,6 +275,8 @@ impl Engine {
     pub fn go(&mut self, limits: LimitsType) {
         debug_assert!(limits.perft == 0);
         self.verify_network();
+        // the threads reach the replica of their node in the search
+        self.numa.ensure_replicated(self.threads.size());
         let options = self.search_options();
         self.threads.start_thinking(&self.pos, limits, options, false);
     }
@@ -238,60 +296,80 @@ impl Engine {
         }
     }
 
-    /// Loads the network of the `EvalFile` option if it is not the one
-    /// loaded, printing nothing: the file is looked for as given (relative
-    /// to the working directory), then in the directory of the binary. When
-    /// a network is (re)loaded, the workers are cleared, as `load_network()`
-    /// does in C++.
-    fn load_network(&mut self) {
-        let path = self.eval_file();
+    /// `Network::load()` of a name: unless it is the one loaded, the file is
+    /// looked for as given (relative to the working directory), then in the
+    /// directory of `argv[0]`, then in `DEFAULT_NNUE_DIRECTORY` if the build
+    /// environment named one. A network that cannot be read leaves the one
+    /// loaded in place, as in C++. When a network is loaded the workers get
+    /// it and are cleared. Prints nothing. (C++'s default name means its
+    /// embedded network first; the port has none, as a C++ build with
+    /// `NNUE_EMBEDDING_OFF`.)
+    fn load_network_named(&mut self, path: Vec<u8>) {
         if self.network.as_ref().map(|(p, _)| p) == Some(&path) {
             return;
         }
-        self.network = None;
-        self.network_verified = false;
-        let mut dirs = vec![std::path::PathBuf::new()];
-        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
-            dirs.push(dir);
+        let mut dirs = vec![std::path::PathBuf::new(), self.binary_directory.clone()];
+        if let Some(d) = option_env!("DEFAULT_NNUE_DIRECTORY") {
+            dirs.push(std::path::PathBuf::from(d));
         }
         for dir in dirs {
             let Ok(file) = File::open(dir.join(uci::path_from_bytes(&path))) else { continue };
             if let Some(net) = Network::load(BufReader::with_capacity(1 << 16, file)) {
-                self.network = Some((path.clone(), Arc::new(net)));
-                break;
+                let net = Arc::new(net);
+                self.network = Some((path, net.clone()));
+                self.threads.for_each_worker(|w| w.set_network(net.clone()));
+                self.threads.clear();
+                return;
             }
         }
-        if let Some((_, net)) = &self.network {
-            let net = net.clone();
-            self.threads.for_each_worker(|w| w.set_network(net.clone()));
-            self.threads.clear();
+    }
+
+    /// The load of the default network that C++ makes when the engine is
+    /// created, made here on first need.
+    fn ensure_initial_network(&mut self) {
+        if !self.initial_network_tried {
+            self.initial_network_tried = true;
+            self.load_network_named(EVAL_FILE_DEFAULT_NAME.as_bytes().to_vec());
         }
+    }
+
+    /// `load_network()`: the network of the `EvalFile` option.
+    fn load_network(&mut self) {
+        self.ensure_initial_network();
+        let path = self.eval_file();
+        self.load_network_named(path);
     }
 
     /// At `isready`, loads the network if none is loaded yet, so that the
-    /// first `go` does not spend its clock on it: C++ embeds the network and
-    /// has it from the start, and the UCI protocol sends `isready` before a
+    /// first `go` does not spend its clock on it: C++ loads it when the
+    /// engine is created, and the UCI protocol sends `isready` before a
     /// search for such initialisation. Prints nothing; a failure is reported
-    /// by the next verify_network(), as before. Never while a network is
-    /// loaded, so never while a search runs.
+    /// by the next verify_network(). Never while a network is loaded, so
+    /// never while a search runs.
     pub fn preload_network(&mut self) {
-        if self.network.is_none() {
-            self.load_network();
-        }
+        self.ensure_initial_network();
     }
 
-    /// Loads the network of the `EvalFile` option if it is not loaded yet, or
-    /// terminates as C++ does when it cannot (`Engine::verify_network`). The
-    /// first call after a load announces the network.
+    /// The network for a search or a dump, without the messages of
+    /// verify_network().
+    pub fn network(&mut self) -> Option<Arc<Network>> {
+        self.ensure_initial_network();
+        self.network.as_ref().map(|(_, n)| n.clone())
+    }
+
+    /// `Engine::verify_network()`: unless the network of the `EvalFile`
+    /// option is the one loaded, terminates as C++ does; otherwise announces
+    /// it, then the status of each replica, at every call, as C++ does. It
+    /// loads nothing (`EvalFile` is loaded when set), but the default
+    /// network the first time, which C++ loads at start-up.
     pub fn verify_network(&mut self) -> Arc<Network> {
-        self.load_network();
-        if !self.network_verified {
-            let name = String::from_utf8_lossy(&self.eval_file()).into_owned();
-            let mut out = io::stdout().lock();
-            match &self.network {
-                Some((_, net)) => {
-                    let _ = writeln!(
-                        out,
+        self.ensure_initial_network();
+        let path = self.eval_file();
+        let name = String::from_utf8_lossy(&path).into_owned();
+        match &self.network {
+            Some((current, net)) if *current == path => {
+                if self.verify_output {
+                    sync_println!(
                         "info string NNUE evaluation using {name} ({}MiB, ({}, {}, {}, {}, 1))",
                         net.reported_size_mib(),
                         crate::nnue::feature_transformer::INPUT_DIMENSIONS,
@@ -300,7 +378,9 @@ impl Engine {
                         crate::nnue::L3
                     );
                 }
-                None => {
+            }
+            _ => {
+                if self.verify_output {
                     let msg = [
                         "Network evaluation parameters compatible with the engine must be available.".to_string(),
                         format!("The network file {name} was not loaded successfully."),
@@ -308,16 +388,67 @@ impl Engine {
                         format!("The default net can be downloaded from: https://tests.stockfishchess.org/api/nn/{EVAL_FILE_DEFAULT_NAME}"),
                         "The engine will be terminated now.".to_string(),
                     ];
+                    let mut out = String::new();
                     for line in msg {
-                        let _ = writeln!(out, "info string ERROR: {line}");
+                        out += &format!("info string ERROR: {line}\n");
                     }
-                    let _ = out.flush();
-                    std::process::exit(1);
+                    crate::io::write_out(out.as_bytes());
                 }
+                std::process::exit(1);
             }
-            self.network_verified = true;
+        }
+        if self.verify_output {
+            for line in self.numa.replica_statuses() {
+                sync_println!("info string {line}");
+            }
         }
         self.network.as_ref().unwrap().1.clone()
+    }
+
+    /// `Engine::save_network()` (`export_net`): writes the network to the
+    /// file, by default (only for the default network) to the default name
+    /// in the working directory, byte for byte the file it was read from.
+    pub fn save_network(&mut self, file: Option<&[u8]>) {
+        self.ensure_initial_network();
+        match &self.network {
+            None => sync_println!(
+                "Failed to export a net. No network file is currently loaded. Please load a network file first."
+            ),
+            Some((current, _)) if file.is_none() && current.as_slice() != EVAL_FILE_DEFAULT_NAME.as_bytes() => {
+                sync_println!(
+                    "Failed to export a net. A non-embedded net can only be saved if the filename is specified"
+                )
+            }
+            Some((_, net)) => {
+                let name = file.unwrap_or(EVAL_FILE_DEFAULT_NAME.as_bytes());
+                let saved = File::create(uci::path_from_bytes(name)).and_then(|f| {
+                    let mut w = io::BufWriter::with_capacity(1 << 16, f);
+                    net.save(&mut w)?;
+                    w.flush()
+                });
+                if saved.is_ok() {
+                    sync_println!("Network saved successfully to {}", String::from_utf8_lossy(name));
+                } else {
+                    sync_println!("Failed to export a net");
+                }
+            }
+        }
+        // modify_and_replicate()
+        self.numa.prepare_replicas();
+    }
+
+    /// `Engine::trace_eval()` (`eval`): the evaluation of the position set
+    /// again from its FEN (its history dropped, as in C++).
+    pub fn trace_eval(&mut self) {
+        let mut p = Position::new();
+        let _ = p.set(self.pos.fen().as_bytes(), self.chess960());
+        let network = self.verify_network();
+        sync_println!("\n{}", crate::evaluate::trace(&p, &network));
+    }
+
+    /// `Engine::visualize()` (`d`).
+    pub fn visualize(&self) -> String {
+        self.pos.visualize()
     }
 
     pub fn tt(&self) -> &TranspositionTable {
@@ -352,7 +483,9 @@ impl Engine {
             ("nodestime", "0"),
             ("Ponder", "false"),
         ] {
-            self.setoption(name, value);
+            if let Some(info) = self.setoption(name, value) {
+                uci::print_info_string(&info);
+            }
         }
 
         let chess960 = self.chess960();
@@ -399,7 +532,6 @@ impl Engine {
             on_start: Box::new(|| {}),
         });
 
-        let stdout = io::stdout();
         let mut line = Vec::new();
         let mut session = 0;
         let mut read_error = false;
@@ -422,8 +554,7 @@ impl Engine {
 
             let mut commands = Vec::new();
             if let Some(error) = parse_session(&l, &mut commands) {
-                let _ = writeln!(
-                    stdout.lock(),
+                sync_println!(
                     "{{\"session\":{session},\"error\":{},\"input\":{}}}",
                     json_string(error.as_bytes()),
                     json_string(&l)
@@ -439,8 +570,7 @@ impl Engine {
                 if !cmd.is_go {
                     let moves: Vec<&[u8]> = cmd.moves.iter().map(|m| m.as_slice()).collect();
                     if let Err(e) = self.set_position(&cmd.fen, &moves) {
-                        let _ = writeln!(
-                            stdout.lock(),
+                        sync_println!(
                             "{{\"session\":{session},\"search\":{},\"error\":{},\"input\":{}}}",
                             search + 1,
                             json_string(e.what()),
@@ -465,7 +595,7 @@ impl Engine {
                 let limits =
                     LimitsType { depth: cmd.depth, nodes: cmd.nodes, start_time: now(), ..LimitsType::default() };
 
-                self.verify_network();
+                self.network();
                 self.threads.main_worker().tracer = Some(tracer);
                 let options = self.search_options();
                 self.threads.start_thinking(&self.pos, limits, options, true);
@@ -521,7 +651,7 @@ impl Engine {
                     r += &format!("\"{cp:016X}\"");
                 }
                 r += "]}";
-                let _ = writeln!(stdout.lock(), "{r}");
+                sync_println!("{r}");
             }
         }
 
@@ -534,7 +664,7 @@ impl Engine {
                 .map(|(k, n)| format!("{}:{n}", json_string(k.as_bytes())))
                 .collect::<Vec<_>>()
                 .join(",");
-            let _ = writeln!(stdout.lock(), "{{\"counts\":{{{counts}}}}}");
+            sync_println!("{{\"counts\":{{{counts}}}}}");
         }
 
         // A read error must not pass for the end of the file
@@ -564,5 +694,20 @@ pub fn default_update_context() -> UpdateContext {
         on_iter: Box::new(uci::on_iter),
         on_bestmove: Box::new(uci::on_bestmove),
         on_start: Box::new(|| {}),
+    }
+}
+
+/// `CommandLine::get_binary_directory()`: the directory of `argv[0]`, `.`
+/// if it has none; on Windows that of the executable
+/// (`GetModuleFileNameW`, which `current_exe()` calls), `argv[0]` if that
+/// fails.
+fn binary_directory(argv0: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    let exe = if cfg!(windows) { std::env::current_exe().ok().map(|p| p.into_os_string()) } else { None };
+    let path = exe.or(argv0).map(std::path::PathBuf::from);
+    let dir = path.and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();
+    if dir.as_os_str().is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        dir
     }
 }

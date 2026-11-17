@@ -19,27 +19,27 @@ it with the differential harness of `tests/differential/`.
 | 6. Move picker, histories | `movepick.{h,cpp}`, `history.h` (every table, the correction histories included) | `movepick.rs`, `history.rs` | `order_main_shallow`, `order_main_deep`, `order_qsearch`, and the drivers of `movepick_check.sh` (see below) |
 | 7. Search, transposition table (one thread) | `search.{h,cpp}`, `tt.{h,cpp}`, `searchtrace.{h,cpp}`, `score.cpp`, and of `thread`, `engine`, `uci`, `ucioption`, `timeman`, `benchmark` what a search without a clock needs | `search.rs`, `tt.rs`, `searchtrace.rs`, `score.rs`, `thread.rs`, `engine.rs`, `uci.rs`, `ucioption.rs`, `timeman.rs`, `benchmark.rs` | the search trace (`verify.sh trace`, `trace-uci`), `bench`, and the drivers of `tt_check` (see "The search" below) |
 | 8. Time management | `timeman.{h,cpp}`, the clock side of `search.cpp` (the end of each iteration, `check_time()`, `start_searching()`), `go wtime/btime/winc/binc/movestogo` of `uci.cpp` | `timeman.rs`, `search.rs`, `uci.rs` | the drivers of `tm_check` and the searches on a clock of `tests/search/clock*` (see "Time management" below) |
+| 10. The UCI surface | `eval` (`evaluate.cpp`, `nnue_misc.cpp`), `export_net` (`Network::save`), `d`, `compiler`, `help`, `speedtest` (`setup_benchmark`), `Debug Log File` (the logger of `misc.cpp`), `NumaPolicy`'s parsing and messages (`numa.h`, without binding), the network messages; skill levels checked | `evaluate.rs`, `nnue/`, `position.rs`, `misc.rs`, `benchmark.rs`, `uci.rs`, `io.rs`, `numa.rs`, `engine.rs`, `build.rs` | `bench/compare_commands.py`, `surface_check`, the seeded searches with a skill level, `tests/instrumented.py` (see "The UCI surface" below) |
 | 9. Threads | `thread.{h,cpp}` (one NUMA node), and what depends on the thread count in `search.cpp`, `engine.cpp`, `tt.cpp`, `history.h`; `flip` | `thread.rs`, `search.rs`, `engine.rs`, `tt.rs`, `misc.rs`, `position.rs` | the drivers of `threads_check`, the thread index check, the trace sample after a larger pool, `uci_stress`, `tests/instrumented.py` (see "Threads" below) |
 
 `dump` prints all 22 members of the C++ `dump`, and `dumpline` every member
 of the C++ `dumpline`.
 
-Not ported yet: Syzygy tablebases, `eval`, `export_net`, `compiler`,
-`license`, and NUMA (`NumaPolicy` is accepted, without effect: the port
-behaves as C++ on a machine with one node, see "Threads"). Ported but
-checked by nothing but reading: skill levels. Checked by direct comparisons
-with the reference rather than by the corpus: MultiPV above 1, `searchmoves`,
-`go mate`, `go infinite`, pondering, searches on a clock; see "The search",
-"What the gates do not see", and "Time management".
+What the port has of the C++ engine, file by file, command by command,
+option by option, message by message, and what it does not have and why, is
+in [INVENTORY.md](INVENTORY.md), built from the C++ sources and from running
+the reference binary and the port side by side.
 
 ## The network
 
 The port reads the network from a file rather than embedding it: the
 `EvalFile` option, `nn-18cd32e11a9c.nnue` by default, looked for as given
 (relative to the working directory) and then in the directory of the binary,
-as the C++ engine does for a network that is not embedded. It is loaded on the
-first `dump` or `dumpline`; without it the engine stops with the same messages
-as the C++ one. `go perft` and the other commands do not need it.
+as the C++ engine does for a network that is not embedded (since layer 10
+the directory of `argv[0]`, as C++). The default network is loaded on first
+need (`isready`, `go`, `eval`, `dump`, ...), where C++ loads it at start-up;
+without it the engine stops with the same messages as the C++ one, `go
+perft` included since layer 10.
 
 On the development machine the network is in the shared folder (see
 `tests/differential/README.md`, "The shared folder"): link it next to the
@@ -128,6 +128,27 @@ Elsewhere, download it into `src/` and link that:
     python3 bench/threads_measure.py bench target/release/stockfish --threads 1,2,4
     EXE=$PWD/target/release/stockfish REF=$PWD/target/release/stockfish $S/venv/bin/python \
         bench/play_games.py --threads 2 --ref-threads 1 --ref-name port-1-thread
+
+    # the UCI surface (see "The UCI surface"): the commands and options
+    # outside a search against the reference (REF, default the shared
+    # folder's), and against the recorded digests as the emulated targets do
+    CMP_TMP=~/.cache EXE=$PWD/target/release/stockfish python3 bench/compare_commands.py
+    EXE=$PWD/target/release/stockfish python3 bench/compare_commands.py --expected commands.expected.jsonl
+    # skill levels and speedtest's commands: a copy of src/ patched with
+    # bench/skill_seed.patch (T on disk), its driver against the port's
+    cp -r ../src ../scripts "$T"/ && patch -d "$T/src" -p2 < bench/skill_seed.patch
+    make -C "$T/src" -j2 ARCH=x86-64-sse41-popcnt build
+    SRC=$T/src ARCH=x86-64-sse41-popcnt bench/build_surface_check.sh
+    cargo build --release -j2 --example surface_check
+    target/cpp/surface_check > sc-cpp.txt
+    target/release/examples/surface_check | cmp - sc-cpp.txt
+    target/cpp/surface_check digest | cmp - surface_check.expected
+    # whole searches with a skill level, the seed fixed on both sides
+    cargo build --release -j2 --features skill_seed --target-dir target/skill
+    EXE=$PWD/target/skill/release/stockfish REF=$T/src/stockfish SF_SKILL_SEED=777 \
+        python3 bench/compare_uci.py ../tests/differential/sample/standard.trace.gz --option "Skill Level=3"
+    # the unpatched engines, statistically (about 20 minutes)
+    EXE=$PWD/target/release/stockfish python3 bench/skill_stats.py --runs 300
 
     # perft, the positions and node counts of tests/perft.sh
     ./perft.sh target/release/stockfish
@@ -520,7 +541,7 @@ below.
 
 Four floating-point expressions of this commit reach the search or the
 output besides time management's (see "Time management", "Floating
-point") and skill levels' (out of scope):
+point") and skill levels' (see "The UCI surface", "Skill levels"):
 
 - the reduction table, `int(2872 / 128.0 * std::log(i))`: a constant table in
   the port (`REDUCTIONS`), which a unit test recomputes from the formula.
@@ -539,7 +560,7 @@ point") and skill levels' (out of scope):
   so any `exp` accurate to about 1e-9 (glibc's, musl's, x87's) gives C++'s
   result; a unit test checks the margin on each target, and the `wdl` field
   is compared with the reference binary below;
-- `Skill` (strength limit): ported, out of scope, checked by nothing.
+- `Skill` (strength limit): `F64` since layer 10, see "The UCI surface".
 
 ### What the gates do not see, and what checks it
 
@@ -582,7 +603,7 @@ both tracing binaries with that size), and is fixed.
 
 Still checked by nothing but reading against C++: `max_ply` in search and
 qsearch, the depth cap, the `forgottenMate` rollback and the depth-1 loss
-label, the `-VALUE_INFINITE` output fallback, skill levels,
+label, the `-VALUE_INFINITE` output fallback,
 `syzygy_extend_pv()` without tables. (Several threads: see "Threads".
 Pondering, `go infinite` and `nodestime` are compared since layer
 8: see "Time management".)
@@ -669,13 +690,8 @@ work should go, in order of evidence:
 
 - **Threads**: see "Threads", "For the next layers".
 - **Time management**: see "Time management", "For the next layers".
-- **The remaining UCI options.** `NumaPolicy`, `Debug Log File`,
-  `SyzygyPath` and the other Syzygy options are accepted and ignored (a
-  `SyzygyPath` prints an `info string`); `eval`, `export_net`, `compiler`
-  and `license` are not ported (`flip` is, with layer 9). MultiPV, `searchmoves`, `go mate`,
-  `UCI_ShowWDL` and other hash sizes are compared with the reference (see
-  above), and since layer 8 pondering, `go infinite` and `nodestime`; skill
-  levels and `UCI_LimitStrength`/`UCI_Elo` are ported and unchecked.
+- **The remaining UCI options**: done in layer 10, see "The UCI surface"
+  and INVENTORY.md.
 
 ## Time management
 
@@ -983,28 +999,27 @@ changes: every gate of the earlier layers passes unchanged.
   a new table then leaves as it is: the same contents, slower for a large
   hash with many threads.
 - **`Threads` has the bounds of C++**, 1 to `max(1024, 4 * cores)`, on every
-  target (C++ gives 32-bit builds the same bounds). The cores are
-  `available_parallelism()` (the CPUs the process may use) where C++ takes
-  `hardware_concurrency()` (the CPUs online): they differ only past 256
-  CPUs, or when the affinity is restricted on such a machine.
+  target (C++ gives 32-bit builds the same bounds). The cores are, as in
+  C++'s `hardware_concurrency()`, the CPUs online (since layer 10; before,
+  `available_parallelism()`, the CPUs the process may use).
 - **The output around a search**: `setoption name Threads` prints `info
   string Using N threads` (`Using 1 thread`), as C++ does through its
-  option's `on_change`; `go` prints the same line, where C++ prints it after
-  `info string Available processors: ...` (NUMA, not printed by the port).
+  option's `on_change`; `go` prints the same line, after `info string
+  Available processors: ...` (since layer 10).
   `Engine::setoption()` returns the line and the UCI loop prints it, as
   C++'s info listener does.
 - **A job that panics aborts the process** (debug builds unwind): a thread
   that died with `searching` set would leave whoever waits for it waiting
   forever; aborting makes the failure visible.
-- **NUMA: one node.** `NumaPolicy` is accepted and ignored. The port behaves
-  as C++ on a machine with one NUMA node, or with `NumaPolicy none`: no
+- **NUMA: one node.** Since layer 10 `NumaPolicy` is parsed and prints what
+  C++ prints (see "The UCI surface"), but nothing is bound or replicated.
+  The port behaves as C++ on a machine with one NUMA node, or with
+  `NumaPolicy none`: no
   thread is bound to a node, there is one network (C++ replicates it per
   node, `LazyNumaReplicatedSystemWide`), one set of shared histories for all
   threads (C++ has one per node, sized by the threads of that node), the
-  hash is cleared in thread order (C++ orders the threads by node), and
-  neither `info string Available processors: ...` nor the per-node binding
-  information is printed, nor `NumaPolicy`'s error message for an invalid
-  value. A later layer adding NUMA would give `ThreadPool::set()` a map of
+  hash is cleared in thread order (C++ orders the threads by node). A later
+  layer adding NUMA would give `ThreadPool::set()` a map of
   shared histories by node (C++'s `sharedHistories`), each worker its node's
   (`Worker::new` already takes `numa_thread_idx` and `numa_total`), and the
   network an `Arc` per node.
@@ -1152,13 +1167,27 @@ run instead, and what each one establishes:
    and the best move agrees with the single-threaded one as often (75.7%
    and 76.5%, of 255 moves). Within the run-to-run spread, nothing here
    distinguishes the two engines but the speed of one thread (2.2 times).
+   **Re-measured in layer 10** (on master, after the fix of the keys word
+   of the table, `f9e0928b`), `bench 16 2 13 default depth` 20 times each,
+   port and C++ interleaved, nothing else running: total nodes, port median
+   5,680,800 (from 4.00 to 12.21 million), C++ 5,833,546 (from 3.92 to 9.00
+   million); standard deviation over mean 35% against 25%, half range over
+   median 72% against 44%, interquartile range over median 25% against 39%;
+   the standard deviation of the logarithm of the total 0.31 against 0.26,
+   a permutation test on it p 0.36, Brown-Forsythe p 0.89, Mann-Whitney
+   U/(n·m) 0.53. Per position the port's relative spread is the larger at 26
+   of 49. The total is dominated by one position (the 37th searched, a
+   median of 2.7 million nodes in both), with a long tail in both engines
+   (the port's two largest totals come from it). So the spreads do not
+   differ measurably; the 14% of C++ over 5 runs was a small sample.
    A match of the port with 2 threads against the port with 1 thread on a
    clock (`play_games.py --threads 2 --ref-threads 1`, REF the port, 10 s +
    0.1 s, Hash 16, no pondering, 32 games: 8 lines of play of the sample
    cut at 8 and at 10 plies, each played with both colours): 18 to 14 for 2 threads, no loss on time, no illegal move, no
    crash, for information only.
 5. **`tests/instrumented.py`** (see below): 103 of 103 cases run pass, with
-   1 and 4 threads; 4 cases need what is not ported.
+   1 and 4 threads; 4 cases needed what was not ported (all 108 pass since
+   layer 10).
 
 What the gates do not establish: that the port with several threads plays
 as well as C++ with as many (a matter of games, at the port's speed); that no
@@ -1186,34 +1215,28 @@ case); `--skip Suite.case` (fnmatch) leaves cases out. `testing.py` imports
 port next to it (the port's `searchtrace` is in the one binary):
 
     ln -sf stockfish target/release/stockfish-trace
-    python3 ../tests/instrumented.py --no-syzygy --keep-going \
-        --skip TestCLI.test_network_equals_base \
-        --skip TestInteractive.test_verify_nnue_network \
-        --skip 'TestInvalidOptions.test_numa_*' [--none|--sanitizer-thread] target/release/stockfish
+    python3 ../tests/instrumented.py --no-syzygy --keep-going [--none|--sanitizer-thread] target/release/stockfish
 
 (`--sanitizer-thread` sets `Threads` 4 in the cases that take a thread
-count; it runs no sanitizer here.) Case by case, with 1 and with 4 threads:
+count; it runs no sanitizer here. `test_network_equals_base` looks for the
+network in `src/`: link it there from the shared folder.) Since layer 10,
+with 1 and with 4 threads, **108 of 108** cases pass, every case outside
+`TestSyzygy` (6 cases: tablebases, next layer): `TestCLI` 18, `TestInteractive`
+24, `TestEnPassantSanitization` 12, `TestInvalidFEN` 5, `TestInvalidOptions`
+6, `TestBenchFile` 4, `TestDump` 12, `TestDumpFile` 4, `TestDumpLine` 10,
+`TestDumpLineFile` 3, `TestSearchTraceUCI` 2, `TestSearchTrace` 8 (against
+the port's own `searchtrace`). The five cases that passed only because the
+engine exits with 0 after `Unknown command` now check their output (a change
+to `instrumented.py` that holds for the C++ engine too): `test_eval` (the
+table and the final evaluation), `test_d` (the board, `Fen`, `Key`,
+`Checkers`), `test_compiler` (the three labels), `test_license` (the text),
+`test_export_net_verify_nnue` (the message and the file); each also fails
+on `Unknown command`. The cases skipped before pass: `test_network_equals_base`
+(the exported file is the network, `diff`), `test_verify_nnue_network` (a
+search with the exported file as `EvalFile`), `test_numa_garbage`,
+`test_numa_malformed_range`, `test_numa_overflow` (the messages).
 
-- **Pass (103):** every case of `TestCLI` but one, `TestInteractive` but
-  one, `TestEnPassantSanitization`, `TestInvalidFEN`, `TestInvalidOptions`
-  but three, `TestBenchFile`, `TestDump`, `TestDumpFile`, `TestDumpLine`,
-  `TestDumpLineFile`, `TestSearchTraceUCI`, `TestSearchTrace` (the latter
-  against the port's own `searchtrace`). `flip` is ported for
-  `test_fen_position_2_flip` (a few lines; it gives C++'s FEN). Five of
-  them pass without testing anything of the port: `test_eval`,
-  `test_compiler`, `test_license`, `test_export_net_verify_nnue` only check
-  that the process exits with 0, which the port does after `Unknown
-  command`; and `TestInteractive.test_d` only that `d` runs.
-- **Need what is not ported (4):** `test_network_equals_base` and
-  `test_verify_nnue_network` (`export_net`; the second sets `EvalFile` to a
-  file that `export_net` would have written, and the engine then exits at
-  `go` for want of a network, as C++ would, which ends the suite);
-  `test_numa_garbage`, `test_numa_malformed_range`, `test_numa_overflow`
-  (the error message of an invalid `NumaPolicy`: NUMA). Without the skips,
-  these fail and the NUMA ones wait for the 5-minute limit each.
-- **Not run:** `TestSyzygy` (6 cases: tablebases, not ported).
-
-CI runs the 103 with 1 and 4 threads on x86-64.
+CI runs all 108 with 1 and 4 threads on x86-64, no case skipped.
 
 ### Memory
 
@@ -1296,6 +1319,252 @@ Miri, real 32-bit hardware, more than two cores, playing strength.
   slower than C++.
 - **More than 2 cores**: the scaling and the start-up cost were measured on
   2; a machine with more would say more.
+
+## The UCI surface
+
+Layer 10 makes the port complete outside Syzygy, NUMA binding and the
+network embedded in the binary: every command of `uci.cpp`, every option and
+every message, as INVENTORY.md lists them row by row with their gates.
+
+### What was ported, and what each gate establishes
+
+- **`eval`** (`Engine::trace_eval`, `Eval::trace`, `nnue_misc.cpp`): the
+  output of each stored layer stack (92 for the default network), the stack
+  used, the network's output and the final evaluation, from a position set
+  again from its FEN; `Final evaluation: none (in check)` in check. The
+  values are formatted doubles: `0.01 * to_cp(v)` with two decimals, which
+  the port prints from the integer (the double is within one unit in the
+  last place of the hundredth, far from the rounding of the third decimal),
+  and `to_cp()` itself computed with `F64` (`evaluate::to_cp_exact`): the
+  outputs of single stacks can leave the range of a score, where the margins
+  of the search output ("The search", "Floating point") are not proven, so
+  the doubles are those of x86-64 on every target, the x87 included. Gate:
+  `compare_commands.py`, `eval-*`, identical on 1,653 standard and 600
+  Chess960 positions of the samples (every 4th and every 2nd, and every
+  position in check: 1,092), after moves, at rule50 99, from the command
+  line and as `bench`'s `eval` limit (every position of `bench`); on the emulated targets
+  against the digests of the C++ output. Does not establish: positions far
+  from the samples' kinds (the arithmetic is the same for all).
+- **`export_net [file]`** (`Network::save`, `write_parameters`): the header,
+  the description, the table of the layer stacks, the feature transformer
+  and each stored stack (the first layer transposed back to the file's
+  order), each part after its hash. Gate: `export-*`, the sha256 of each
+  file written equal to C++'s, which is that of `nn-18cd32e11a9c.nnue`: with
+  and without a file name, from the command line, after `EvalFile` names
+  another file (without a file name both refuse with C++'s message), after a
+  failed load (the loaded network stays, both write it), to a path that
+  cannot be written (`Failed to export a net`). **Without an embedded
+  network** the port behaves as a C++ build with `NNUE_EMBEDDING_OFF`: the
+  default network is the file of that name found in the working directory or
+  next to the binary, `export_net` without a name writes it to that name in
+  the working directory (the same bytes C++ writes from its embedded copy),
+  and if no network could be loaded at all it prints `Failed to export a
+  net. No network file is currently loaded. Please load a network file
+  first.`, where C++ with embedding always has one. Does not establish:
+  networks other than the default one (none is at hand; the code writes back
+  whatever it read, padding included).
+- **`d`** (`operator<<` of `Position`): gate `d`, `d-cli` (standard,
+  Chess960, in check, after `flip`). The tablebase lines need tables (next
+  layer).
+- **`compiler`**: C++ describes its compiler; the port prints the same four
+  lines under the same labels for the Rust build: `Compiled by : rustc
+  1.85.1 on Linux`, the target triple as the architecture, `64bit` or
+  `32bit` and the extensions of C++'s list that the target enables (`SSE2`
+  on x86-64 baseline, `POPCNT` with `-C target-cpu=native`, `NEON`, ...,
+  ` DEBUG` for a debug build), and the full `rustc -V` where C++ prints
+  `__VERSION__`. Gate: its shape (`compiler`, `compiler-cli`).
+- **The start-up line and `id name`**: `Stockfish dev-YYYYMMDD-<sha8> (Rust
+  port) by the Stockfish developers (see AUTHORS file)`, the date and commit
+  computed by `build.rs` from git as the C++ Makefile does (`-m` when the
+  tree differs from the commit, the build date and `nogit` without git),
+  with ` (Rust port)` so that a GUI tells the two engines apart. Not
+  compared (each engine names itself); instrumented.py checks it starts with
+  `Stockfish`.
+- **`help`, `--help`, `license`, `--license`**: gate `help*`.
+- **`speedtest [threads] [hash] [seconds]`** (`setup_benchmark`,
+  `UCIEngine::benchmark`): the arguments read as `is >> n` reads them (the
+  first that fails making the others fail, a number's prefix taken), clamped
+  with C++'s warnings, the default thread count C++'s (the CPUs online) and
+  hash (128 MiB per thread); the 258 positions of the 5 games of `BenchmarkPositions`,
+  each with a `go movetime` scaled to the time asked for (C++ accumulates
+  the times in `float`: the port does the float additions and division
+  through `F64` and rounds each result to a float, which gives the float
+  result on every target); three warm-up searches; every search's output
+  and the network verification silenced; the hash fullness after each
+  search; the report on stderr. Gates: `surface_check` (the commands for 20
+  argument lists, identical to the C++ function's, natively, with
+  `softfloat` and under emulation); `speedtest*` (the progress lines, the
+  labels and order of the report, the invocations, thread count, binding,
+  hash size and the clamping warnings identical; the numbers that depend on
+  the machine checked for their form only). In the report `Large pages` is
+  `no` (the port has none, see INVENTORY.md, section 5) and `Version` and
+  the compiler lines are the port's. Does not establish: the speed it
+  reports, which is the machine's.
+- **`Debug Log File`** (the logger of `misc.cpp`): everything the engine
+  prints goes through `io.rs` (`sync_println!`, `io::Out`), which copies it
+  to the log with `<< ` at the start of each line, and what is read with
+  `>> ` as it is consumed, one `last` character shared by both directions as in C++; an empty
+  value closes the log, a new name truncates; a file that cannot be opened
+  ends the program with `Unable to open debug log file "<path>"` on stderr
+  (the path quoted as `std::filesystem::path` prints it). Gate: `log*`, the
+  output, the exit code and the files written identical (a session with
+  searches, `d`, `eval`, errors, closing, a second file, reopening the
+  first; from the command line, where nothing is read from stdin; the bad
+  paths). Standard error is not logged, in C++ either.
+- **`NumaPolicy`: parsing and messages only** (`numa.rs`). Accepted and
+  refused values, `NumaPolicy: invalid value '<v>', keeping previous
+  config.`, `Available processors: ...` at `go` and after a change, the
+  binding C++ would make in `Using N threads with NUMA node thread binding:
+  ...` (after `system`, `hardware`, a list of processors, or a refused value,
+  which C++ stores and then treats as a request to bind), and one `Network
+  replica K: ...` line per node C++ would replicate the network to. The
+  configuration of the machine is that of one node: the processors the
+  process may use (Linux: `Cpus_allowed_list` of `/proc/self/status`), all
+  processors online for `hardware`, 0 to N-1 elsewhere. **Not done:**
+  nothing is bound to a processor, the network is not replicated, the
+  shared histories are not split by node (so with a configuration of
+  several nodes the port searches as with one), and C++'s split of a node
+  into L3 domains (bundles of 32 threads) is not made: on a machine with
+  several NUMA nodes or such domains the port prints one node where C++
+  prints several. Gate: `numa-*`, 27 values each followed by thread counts,
+  a verification and `export_net` (which resets the replicas in C++), and
+  sequences, identical on this machine (CPUs 0-1); they depend on the
+  processors, so they run natively only, the parsing being covered on every
+  target by unit tests. instrumented.py's three `test_numa_*` pass.
+- **The network messages** (`Engine::verify_network`): `NNUE evaluation
+  using ...` at every verification (each `go`, `go perft`, `eval`, `dump`,
+  `dumpline`, each search of `bench`; `searchtrace` once, as C++), where the
+  port printed it once; followed by one replica line. C++ on Linux shares
+  its network between processes and says `Shared memory.`; the port holds
+  its own copy and says what C++ says without shared memory: `Local memory.
+  Shared memory not supported by the OS. Local allocation fallback.` The
+  comparisons normalize that one status. `go perft` now verifies the network
+  as C++ does (and so needs it, as `perft.sh` already provided).
+- **Loading the network as C++**: the default network is loaded on first
+  need where C++ loads it at start-up, then `EvalFile` as set; a file that
+  cannot be read leaves the loaded network in place (C++ loads into a copy
+  that it keeps only on success), so `EvalFile` back to the default name
+  works again; the directory searched after the working directory is that
+  of `argv[0]` (it was the executable's), then `DEFAULT_NNUE_DIRECTORY` if
+  cargo's build environment sets it. Gates: `evalfile-back`, `export-other`,
+  `export-failed-load`, the `*-no-network` cases.
+- **`bench`**: the `ucinewgame` that C++ puts after the options, which only
+  moves the start of `bench`'s clock; `eval` as a limit type.
+- **`Threads`** bounds from the CPUs online, as C++.
+
+### Skill levels
+
+`Skill` was ported in layer 7 and checked by nothing, its choice being
+random. Its doubles are now `F64`: the level of an Elo is a cubic in
+doubles, and `pick_best()` adds a product of the non-integer weakness, which
+the i586 targets would compute in extended precision. The generator stays
+C++'s: one `PRNG` for the process, seeded on first use from the clock (the
+milliseconds of the system clock, where C++ takes its steady clock), kept
+across changes of `Threads`. Three gates:
+
+1. **Exactly, what does not depend on chance, and `pick_best()` given the
+   random numbers.** `bench/surface_check.cpp` links the objects of a build
+   of `src/` patched with `bench/skill_seed.patch` (the seed from
+   `SF_SKILL_SEED`), `examples/surface_check.rs` drives the port alike:
+   for every `UCI_Elo` from 1320 to 3190 and every `Skill Level` from 0 to
+   20, the bits of the level, whether the skill is enabled, the depth at
+   which the move is picked and the integer weakness (1,892 lines); then
+   `pick_best()` on 30,000 synthetic sets of root moves (1 to 30 moves,
+   sorted scores with ties, small and large gaps, mate scores, MultiPV 1 to
+   8, integer and Elo levels), the generator seeded alike (14,352 of them
+   pick another move than the first). Identical natively, with `softfloat`
+   (the i586 arithmetic) and, in CI, on each emulated target against
+   `surface_check.expected`. The forced MultiPV (`max(MultiPV, 4)`) and the
+   swap of the picked line are checked by gate 2.
+2. **Whole searches, the seed fixed.** The port built with the feature
+   `skill_seed` and the patched C++ engine, both given `SF_SKILL_SEED`, over
+   `bench/compare_uci.py`: the trace sample (732 standard searches) at
+   `Skill Level` 0, 3, 10 and 19, half of it (367) at `UCI_Elo` 1320,
+   2000, 2777 and 3190, the Chess960 sample (251) at level 5, the extra
+   sessions (mates, `searchmoves`, `go mate`) at level 7 with MultiPV 2 and
+   at `UCI_Elo` 1800 with `UCI_ShowWDL`: every `info` line and `bestmove`
+   identical (in CI: levels 3 and 12 and one Elo on parts of the samples).
+3. **Statistically, the unpatched engines** (`bench/skill_stats.py`):
+   for 8 positions (the start, middlegames, endgames)
+   and 4 levels (`Skill Level` 0, 4 and 8 and `UCI_Elo` 1600, each searched
+   to the depth at which the move is picked), 300 searches per engine and
+   cell, each after `ucinewgame` so that only the random numbers differ: the
+   move chosen, port against C++, a chi-square test of homogeneity per cell
+   (rare moves pooled): over all 32 cells chi2 92.9 for 93 degrees of
+   freedom, p 0.48; the smallest p of a cell 0.012 (one cell of 32, as
+   chance gives). This is evidence, not a gate: run by hand (about 20
+   minutes here), it fails only for p < 0.001, and it is not in CI.
+
+What the gates do not establish: the strength of play at each level (a
+matter of games); the clock's seeds themselves, which differ by design.
+
+### The gates of what already matched
+
+On the final build, this machine: the trace samples (`trace-uci`,
+`trace`), the four full gates against the shared folder (`full`, 392,703
+positions; `lines-full`, 4,432 lines and 350,908 records; `trace-uci-full`
+and `trace-full`, 17,270 searches), `bench` 3464885, the deepest searches,
+`compare` (hash sizes, `UCI_ShowWDL`, MultiPV, the long and extra sessions),
+the clock sessions (1,045 searches), the trace sample after a larger pool,
+the drivers against a fresh build of `src/` (`movepick_check`, `tt_check`,
+`tm_check` natively, `threads_check`), the stress test (5 minutes, seed 10),
+perft, and CI on every target. The search itself is unchanged: layer 10
+adds nothing to the path of a node (`Skill`'s doubles run once per search
+with a skill level, the output layer once per line).
+
+### Speed
+
+`bench` with one thread, CPU time, three interleaved runs: master 172,463,
+172,572, 172,482 nodes per second; this layer 173,066, 173,907, 173,973.
+Nothing was added to the path of a node.
+
+### Review
+
+An independent review by GPT-6.1 Sol (Codex), read-only, of the inventory
+against the C++ sources and of what was ported, line by line. What it found,
+and what was done:
+
+1. A network file of this architecture malformed past its header: C++ reads
+   into a copy of the loaded network and keeps it with what it read before
+   failing; the port keeps the old network intact. Not reproduced (it would
+   mean reading in place into an existing `Network`); said in INVENTORY.md.
+2. `verify_network()` retried a failed `EvalFile` load (a file that appears
+   afterwards would be taken; C++ exits). Fixed: it loads nothing but the
+   default network the first time; the lazy initial load is said in
+   INVENTORY.md.
+3. `NumaPolicy 0, ,1`: C++'s `str_to_size_t(" ")` is 0 (`strtoull` stops at
+   the start, on white space), so CPU 0 repeats and the value is refused;
+   the port accepted it. Fixed: `strtoull` as C++ reads it (white space,
+   signs, `5 x`), with unit tests and the case `numa-spaces`.
+4. The log got a line only once complete; C++ logs each character as it is
+   consumed, so a partial line comes before what the engine prints while it
+   waits for the rest. Fixed (`read_line_logged`); checked by hand on both
+   engines (`>> isreinfo depth 4 ...` in both logs), timing-dependent so not
+   a gate.
+5. and 6. Windows: the directory of the executable (`GetModuleFileNameW`),
+   and text mode (CRLF read as LF, LF written as CRLF to stdout and the log).
+   Fixed, by reading only (no Windows CI).
+7. The processors outside Linux (Windows processor groups, affinity): not
+   ported (the Windows API); said in INVENTORY.md.
+8. `skill_stats.py` is evidence, not a gate. Relabelled; it now checks that
+   each engine gave as many moves as searches and fails at p < 0.001.
+9. `compare_commands.py`: two wrong compiler shapes compared equal (now a
+   wrong shape fails), the exit codes of the network failures were not
+   compared (now they are, with `dump-no-network`), bytes that are not UTF-8
+   were replaced (now kept, `surrogateescape`).
+10. INVENTORY.md: the range limit of `NumaPolicy` (a range of more than 2^20
+    CPUs is skipped, not refused), `Failed to allocate <N>MB` without a
+    space, `memory.cpp`'s messages: corrected.
+
+Re-run after the fixes, on the final build: `compare_commands.py` (77 cases)
+and against the recorded digests (47), `surface_check` (natively and
+`softfloat`), instrumented.py with 1 and 4 threads (108 of 108), the trace
+samples, `bench`, perft, bench speed; CI on every target. Sol judged correct
+the eval table, the serialization of the network, `d`, the help text, the
+shape of the start-up line and of `compiler`, `speedtest`'s set-up, parsing
+and report, `bench`'s `ucinewgame`, perft's verification, the `Threads`
+maximum on Linux, the skill formulas and their call sites, and found no
+output that bypasses `io.rs`.
 
 ## Speed and memory
 

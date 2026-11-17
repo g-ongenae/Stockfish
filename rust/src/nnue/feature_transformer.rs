@@ -70,6 +70,17 @@ impl FeatureTransformer {
         Some(FeatureTransformer { biases, weights, threat_and_pp_weights })
     }
 
+    /// `write_parameters()`: in the order of the file, which the port keeps
+    /// (C++ undoes its permutations on a copy first).
+    pub fn write_parameters<W: std::io::Write>(&self, stream: &mut W) -> std::io::Result<()> {
+        use super::layers::{write_i16s, write_i8s};
+        write_i16s(stream, &self.biases)?;
+        let threat_size = THREAT_INPUT_DIMENSIONS as usize * HALF_DIMENSIONS;
+        write_i8s(stream, &self.threat_and_pp_weights[..threat_size])?;
+        write_i8s(stream, &self.threat_and_pp_weights[threat_size..])?;
+        write_i8s(stream, &self.weights)
+    }
+
     /// The 1024 weights of a piece-square feature of a block.
     #[inline(always)]
     pub fn psq_row(&self, block: usize, index: u16) -> &[i8; HALF_DIMENSIONS] {

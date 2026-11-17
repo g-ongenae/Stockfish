@@ -1,0 +1,19 @@
+diff --git a/src/search.cpp b/src/search.cpp
+index 338ba3cf..bdb13d83 100644
+--- a/src/search.cpp
++++ b/src/search.cpp
+@@ -2321,7 +2321,13 @@ void update_quiet_histories(
+ // RootMoves using a statistical rule dependent on 'level'.
+ // Idea by Heinz van Saanen.
+ Move Skill::pick_best(const RootMoves& rootMoves, usize multiPV) {
+-    static PRNG rng(now());  // PRNG sequence should be non-deterministic
++    // Test only (rust/bench/skill_seed.patch): the seed from SF_SKILL_SEED
++    // when it is set and not zero.
++    static PRNG rng([] {
++        const char* v    = std::getenv("SF_SKILL_SEED");
++        u64         seed = v ? std::strtoull(v, nullptr, 10) : 0;
++        return seed ? seed : u64(now());
++    }());  // PRNG sequence should be non-deterministic
+ 
+     // With tablebases at the root, rootMoves are ordered by tbRank rather
+     // than by score, so compute the score range explicitly to keep 'delta'

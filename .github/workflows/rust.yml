@@ -222,6 +222,45 @@ jobs:
           cmp idx-cpp.txt thread_idx.expected
           cargo build --release --locked --features thread_idx_offset --target-dir target/idx
           bench/thread_idx_check.sh $PWD/target/idx/release/stockfish | cmp - thread_idx.expected
+      # The commands and options outside a search (INVENTORY.md): eval, d,
+      # export_net (the bytes), compiler, help, speedtest, Debug Log File,
+      # NumaPolicy, the messages, against the C++ engine; then the digests of
+      # the C++ output for the emulated targets, which must be the recorded
+      # ones
+      - name: Commands outside a search, against the C++ engine
+        timeout-minutes: 30
+        run: |
+          # each case runs in an empty directory: the network next to the binary
+          ln -sf ../../../src/nn-18cd32e11a9c.nnue target/release/
+          EXE=$PWD/target/release/stockfish REF=$PWD/../src/stockfish python3 bench/compare_commands.py
+          REF=$PWD/../src/stockfish python3 bench/compare_commands.py --record commands-cpp.jsonl
+          cmp commands-cpp.jsonl commands.expected.jsonl
+      # Skill levels (README.md, "Skill levels"): the C++ engine patched to
+      # take the seed of the skill level from SF_SKILL_SEED; the driver of
+      # the deterministic parts (and of speedtest's commands) against its
+      # functions, natively and with the doubles in software; whole searches
+      # with a skill level and the seed fixed, against the patched engine
+      - name: Skill levels and speedtest's commands, against the C++ engine patched alike
+        timeout-minutes: 40
+        run: |
+          rm -rf "$RUNNER_TEMP/skill" && mkdir "$RUNNER_TEMP/skill"
+          cp -r ../src ../scripts "$RUNNER_TEMP/skill/"
+          patch -d "$RUNNER_TEMP/skill/src" -p2 < bench/skill_seed.patch
+          make -C "$RUNNER_TEMP/skill/src" -j4 ARCH=x86-64-sse41-popcnt build > /dev/null
+          SRC="$RUNNER_TEMP/skill/src" bench/build_surface_check.sh
+          cargo build --release --locked --example surface_check
+          target/cpp/surface_check > surface-cpp.txt
+          target/release/examples/surface_check | cmp - surface-cpp.txt
+          target/cpp/surface_check digest | cmp - surface_check.expected
+          cargo build --release --locked --features softfloat --target-dir target/softfloat --example surface_check
+          target/softfloat/release/examples/surface_check | cmp - surface-cpp.txt
+          cargo build --release --locked --features skill_seed --target-dir target/skill
+          ln -sf ../../../src/nn-18cd32e11a9c.nnue target/skill/release/
+          export EXE=$PWD/target/skill/release/stockfish REF="$RUNNER_TEMP/skill/src/stockfish" SF_SKILL_SEED=777
+          python3 bench/compare_uci.py ../tests/differential/sample/standard.trace.gz --every 2 --option "Skill Level=3"
+          python3 bench/compare_uci.py ../tests/differential/sample/standard.trace.gz --every 2 --option "Skill Level=12"
+          python3 bench/compare_uci.py ../tests/differential/sample/chess960.trace.gz --chess960 --every 2 \
+            --option UCI_LimitStrength=true --option UCI_Elo=2111
       # Nothing left over from a larger pool: the whole trace sample over UCI
       # after searches with 4 and 3, then 8, 2 and 5 threads
       - name: Trace sample after a larger pool
@@ -247,19 +286,17 @@ jobs:
           cargo build --release --locked --features counter32 --target-dir target/counter32
           ./search_check.sh bench target/counter32/release/stockfish
           target/release/examples/uci_stress --seconds 120 --seed ${{ github.run_number }} target/counter32/release/stockfish
-      # tests/instrumented.py against the port, with 1 and 4 threads, the
-      # cases that need what is not ported skipped (export_net, NUMA; no
-      # Syzygy tables downloaded): README.md, "Threads", "instrumented.py".
-      # (--sanitizer-thread only sets Threads to 4 here: no ThreadSanitizer.)
+      # tests/instrumented.py against the port, with 1 and 4 threads, every
+      # case but TestSyzygy (no tables downloaded): README.md,
+      # "instrumented.py". (--sanitizer-thread only sets Threads to 4 here:
+      # no ThreadSanitizer.)
       - name: tests/instrumented.py
         timeout-minutes: 20
         run: |
           ln -sf ../../../src/nn-18cd32e11a9c.nnue target/release/
           ln -sf stockfish target/release/stockfish-trace
           for mode in --none --sanitizer-thread; do
-            python3 ../tests/instrumented.py --no-syzygy --keep-going \
-              --skip TestCLI.test_network_equals_base --skip TestInteractive.test_verify_nnue_network \
-              --skip 'TestInvalidOptions.test_numa_*' $mode target/release/stockfish
+            python3 ../tests/instrumented.py --no-syzygy --keep-going $mode target/release/stockfish
           done
       - name: Move picker, movepick_check.expected is the C++ output
         run: EXE=target/cpp/movepick_check ./movepick_check.sh subset | cmp - movepick_check.expected
@@ -462,6 +499,19 @@ jobs:
           python3 bench/tm_doubles.py tm-native.txt tm-target.txt
       # Searches on a clock under nodestime, part of tests/search/clock*,
       # against the C++ output kept in tests/search/*.expected.jsonl
+      # Skill levels and speedtest's commands against the C++ digest kept in
+      # surface_check.expected (checked against the C++ code by the x86-64
+      # job); the commands outside a search against the digests of the C++
+      # output kept in commands.expected.jsonl
+      - name: Skill levels and speedtest's commands (emulated)
+        run: |
+          cargo build --release --locked --example surface_check
+          $RUNNER target/$TARGET/release/examples/surface_check digest | cmp - surface_check.expected
+      - name: Commands outside a search (emulated)
+        timeout-minutes: 40
+        run: |
+          ln -sf $PWD/../src/nn-18cd32e11a9c.nnue target/$TARGET/release/
+          EXE=$EXE RUN_PREFIX="$RUNNER" python3 bench/compare_commands.py --expected commands.expected.jsonl
       - name: Searches on a clock (emulated)
         run: RUN_PREFIX="$RUNNER" ./search_check.sh clock $EXE
       - name: Bench signature (emulated)

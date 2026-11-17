@@ -40,6 +40,13 @@ impl<const IN: usize, const PADDED: usize, const OUT: usize> AffineTransform<IN,
         AffineTransform { biases, weights }
     }
 
+    /// `write_parameters()`: the biases, then the weights in the row order
+    /// of the file, padding included.
+    pub fn write_parameters<W: std::io::Write>(&self, stream: &mut W) -> std::io::Result<()> {
+        write_i32s(stream, &self.biases)?;
+        write_i8s(stream, &self.weights)
+    }
+
     /// Dense propagation, one dot product per output.
     #[inline]
     pub fn propagate(&self, input: &[u8], output: &mut [i32]) {
@@ -78,6 +85,19 @@ impl<const IN: usize, const PADDED: usize, const OUT: usize> AffineTransformSpar
         AffineTransformSparseInput { biases: dense.biases, weights }
     }
 
+    /// `write_parameters()`: the weights transposed back to the row order of
+    /// the file.
+    pub fn write_parameters<W: std::io::Write>(&self, stream: &mut W) -> std::io::Result<()> {
+        write_i32s(stream, &self.biases)?;
+        let mut dense = vec![0i8; OUT * PADDED];
+        for o in 0..OUT {
+            for i in 0..PADDED {
+                dense[o * PADDED + i] = self.weights[i * OUT + o];
+            }
+        }
+        write_i8s(stream, &dense)
+    }
+
     /// Skips the zero inputs, as `affine_transform_non_ssse3` does.
     #[inline]
     pub fn propagate(&self, input: &[u8], output: &mut [i32; OUT]) {
@@ -110,4 +130,22 @@ pub fn sqr_clipped_relu<const SHIFT: u32>(input: &[i32], output: &mut [u8]) {
     for (o, &x) in output.iter_mut().zip(input) {
         *o = 127i64.min((x as i64 * x as i64) >> (2 * SHIFT + 7)) as u8;
     }
+}
+
+/// `write_little_endian()` of an array of `i8`.
+pub fn write_i8s<W: std::io::Write>(stream: &mut W, values: &[i8]) -> std::io::Result<()> {
+    let bytes: Vec<u8> = values.iter().map(|&v| v as u8).collect();
+    stream.write_all(&bytes)
+}
+
+/// `write_little_endian()` of an array of `i16`.
+pub fn write_i16s<W: std::io::Write>(stream: &mut W, values: &[i16]) -> std::io::Result<()> {
+    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    stream.write_all(&bytes)
+}
+
+/// `write_little_endian()` of an array of `i32`.
+pub fn write_i32s<W: std::io::Write>(stream: &mut W, values: &[i32]) -> std::io::Result<()> {
+    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    stream.write_all(&bytes)
 }

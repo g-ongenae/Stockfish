@@ -228,6 +228,73 @@ pub type BestMoveChanges = std::sync::atomic::AtomicU64;
 #[cfg(any(feature = "counter32", target_pointer_width = "32"))]
 pub type BestMoveChanges = std::sync::atomic::AtomicU32;
 
+/// `engine_version_info()`: `Stockfish dev-YYYYMMDD-<sha8>` as the C++
+/// Makefile builds it from git (`-m` after the date when the tree differs
+/// from the commit, `nogit` without git; build.rs), followed by
+/// ` (Rust port)` so that a GUI tells the two engines apart.
+pub fn engine_version_info() -> String {
+    let modified = if env!("SF_GIT_DIFFINDEX").is_empty() { "" } else { "-m" };
+    format!("Stockfish dev-{}{modified}-{} (Rust port)", env!("SF_GIT_DATE"), env!("SF_GIT_SHA"))
+}
+
+/// `engine_info()`: the start-up line, or with `to_uci` the `id` lines.
+pub fn engine_info(to_uci: bool) -> String {
+    format!(
+        "{}{}the Stockfish developers (see AUTHORS file)",
+        engine_version_info(),
+        if to_uci { "\nid author " } else { " by " }
+    )
+}
+
+/// `compiler_info()`, in the shape of C++ for the Rust compiler: the
+/// compiler and the system, the target triple for the architecture, the
+/// word size and the instruction set extensions the build may use (those of
+/// C++'s list that the target enables), and the full version of the
+/// compiler where C++ prints `__VERSION__`. The labels are those of C++.
+pub fn compiler_info() -> String {
+    let os = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+        "Apple"
+    } else if cfg!(target_os = "android") {
+        "Android"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(all(windows, target_pointer_width = "64")) {
+        "Microsoft Windows 64-bit"
+    } else if cfg!(windows) {
+        "Microsoft Windows 32-bit"
+    } else {
+        "unknown system"
+    };
+    // "rustc 1.85.1 (4eb161250 2025-03-15)": the version is the second word
+    let full = env!("SF_RUSTC_VERSION");
+    let version = full.split_whitespace().nth(1).unwrap_or("(unknown version)");
+
+    let mut settings = String::from(if cfg!(target_pointer_width = "64") { "64bit" } else { "32bit" });
+    for (enabled, name) in [
+        (cfg!(target_feature = "avx512f"), " AVX512"),
+        (cfg!(target_feature = "bmi2"), " BMI2"),
+        (cfg!(target_feature = "avx2"), " AVX2"),
+        (cfg!(target_feature = "sse4.1"), " SSE41"),
+        (cfg!(target_feature = "ssse3"), " SSSE3"),
+        (cfg!(target_feature = "sse2"), " SSE2"),
+        (cfg!(target_feature = "neon"), " NEON"),
+        (cfg!(target_feature = "popcnt"), " POPCNT"),
+        (cfg!(debug_assertions), " DEBUG"),
+    ] {
+        if enabled {
+            settings += name;
+        }
+    }
+
+    format!(
+        "\nCompiled by                : rustc {version} on {os}\
+         \nCompilation architecture   : {}\
+         \nCompilation settings       : {settings}\
+         \nCompiler __VERSION__ macro : {full}\n",
+        env!("SF_TARGET")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,9 @@
 //! Port of `src/uci.{h,cpp}`: the command loop, the parsing of `go`, the
 //! output of a search (`info` lines with their score formatting, `bestmove`),
-//! `bench`, and the debug commands of the fork (`dump`, `dumpline`,
-//! `searchtrace`).
+//! `bench`, `speedtest`, the commands for debugging (`d`, `eval`, `flip`,
+//! `compiler`, `export_net`), and those of the fork (`dump`, `dumpline`,
+//! `searchtrace`). Everything is printed through `io.rs` (the log of `Debug
+//! Log File`).
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
@@ -14,6 +16,7 @@ use crate::position::{square_to_string, Position};
 use crate::score::Score;
 use crate::search::{InfoFull, InfoIteration, InfoShort, LimitsType, UpdateContext};
 use crate::searchtrace::SearchTraceWindow;
+use crate::sync_println;
 use crate::timeman::now;
 use crate::types::*;
 
@@ -95,6 +98,75 @@ fn parse_u64_prefix(t: &[u8]) -> Option<(u64, &[u8])> {
     Some((if neg { v.wrapping_neg() } else { v }, &t[end..]))
 }
 
+/// Successive `is >> n` of `i64` on the arguments of a command: the
+/// numeric prefix of a token, the rest of the token read next; a failure
+/// (no digits, out of range) fails every later read too, as the stream's
+/// failbit does.
+pub struct IntReader<'a> {
+    args: std::slice::Iter<'a, &'a [u8]>,
+    pending: Option<&'a [u8]>,
+    failed: bool,
+}
+
+impl<'a> IntReader<'a> {
+    pub fn new(args: &'a [&'a [u8]]) -> IntReader<'a> {
+        IntReader { args: args.iter(), pending: None, failed: false }
+    }
+
+    pub fn next_i64(&mut self) -> Option<i64> {
+        if self.failed {
+            return None;
+        }
+        let t = match self.pending.take() {
+            Some(t) => t,
+            None => match self.args.next() {
+                Some(t) => *t,
+                None => {
+                    self.failed = true;
+                    return None;
+                }
+            },
+        };
+        match parse_i64_prefix(t) {
+            Some((v, rest)) => {
+                if !rest.is_empty() {
+                    self.pending = Some(rest);
+                }
+                Some(v)
+            }
+            None => {
+                self.failed = true;
+                None
+            }
+        }
+    }
+}
+
+/// A double as `std::ostream` prints it by default (`%g`, 6 significant
+/// digits, trailing zeros removed).
+pub fn format_g6(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    // the exponent of the value rounded to 6 significant digits
+    let e = format!("{v:.5e}");
+    let (mantissa, exp) = e.split_once('e').unwrap();
+    let x: i32 = exp.parse().unwrap();
+    let strip = |s: String| -> String {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s
+        }
+    };
+    if (-4..6).contains(&x) {
+        strip(format!("{v:.prec$}", prec = (5 - x) as usize))
+    } else {
+        let m = strip(mantissa.to_string());
+        format!("{m}e{}{:02}", if x < 0 { '-' } else { '+' }, x.abs())
+    }
+}
+
 /// The whitespace separated tokens of a command, as `is >> token` reads them.
 /// Commands are kept as bytes, as in C++, so that a byte which is not UTF-8
 /// reaches the FEN parser and the file system unchanged.
@@ -131,13 +203,12 @@ impl UciEngine {
     }
 
     fn terminate_on_critical_error(&self, message: &[u8]) -> ! {
-        let mut out = io::stdout().lock();
-        let _ = out.write_all(b"info string CRITICAL ERROR: Command `");
-        let _ = out.write_all(&self.current_cmd);
-        let _ = out.write_all(b"` failed. Reason: ");
-        let _ = out.write_all(message);
-        let _ = out.write_all(b"\n\n");
-        let _ = out.flush();
+        let mut out = b"info string CRITICAL ERROR: Command `".to_vec();
+        out.extend_from_slice(&self.current_cmd);
+        out.extend_from_slice(b"` failed. Reason: ");
+        out.extend_from_slice(message);
+        out.extend_from_slice(b"\n\n");
+        crate::io::write_out(&out);
         std::process::exit(1);
     }
 
@@ -158,11 +229,15 @@ impl UciEngine {
         let mut line = Vec::new();
         loop {
             line.clear();
-            let n = stdin.lock().read_until(b'\n', &mut line).unwrap_or(0);
+            let n = read_line_logged(&mut stdin.lock(), &mut line);
             if n == 0 {
                 line.extend_from_slice(b"quit");
             } else if line.last() == Some(&b'\n') {
                 line.pop();
+                // a C++ build on Windows reads stdin in text mode: CRLF is LF
+                if cfg!(windows) && line.last() == Some(&b'\r') {
+                    line.pop();
+                }
             }
             if !self.execute(&line) {
                 break;
@@ -189,30 +264,26 @@ impl UciEngine {
             // search.
             b"ponderhit" => self.engine.set_ponderhit(false),
             b"uci" => {
-                let mut out = io::stdout().lock();
-                let _ = writeln!(
-                    out,
-                    "id name Stockfish Rust port\nid author the Stockfish developers (see AUTHORS file)\n{}",
-                    self.engine.options.uci_list()
-                );
-                let _ = writeln!(out, "uciok");
+                sync_println!("id name {}\n{}", crate::misc::engine_info(true), self.engine.options.uci_list());
+                sync_println!("uciok");
             }
             b"isready" => {
                 // the network, if none is loaded yet (see preload_network())
                 self.engine.preload_network();
-                let _ = writeln!(io::stdout().lock(), "readyok");
+                sync_println!("readyok");
             }
             b"ucinewgame" => self.engine.search_clear(),
             b"setoption" => self.setoption(tokens),
             b"position" => self.position(tokens),
             b"go" => {
                 // send info strings after the go command is sent for old
-                // GUIs and python-chess (C++ also sends the NUMA
-                // configuration, "Available processors: ...", not ported)
-                println!("info string {}", self.engine.thread_allocation_information_as_string());
+                // GUIs and python-chess
+                print_info_string(&self.engine.numa_config_information_as_string());
+                print_info_string(&self.engine.thread_allocation_information_as_string());
                 self.go(tokens)
             }
             b"bench" => self.bench(tokens),
+            b"speedtest" => self.benchmark(tokens),
             b"dump" => self.dump(tokens.next()),
             b"dumpline" => {
                 // std::getline(args >> std::ws, rest)
@@ -226,21 +297,25 @@ impl UciEngine {
                     self.terminate_on_critical_error(e.what());
                 }
             }
-            b"d" => {
-                let _ = writeln!(
-                    io::stdout().lock(),
-                    "\nFen: {}\nKey: {:016X}",
-                    self.engine.pos.fen(),
-                    self.engine.pos.key()
-                );
-            }
+            b"d" => sync_println!("{}", self.engine.visualize()),
+            b"eval" => self.engine.trace_eval(),
+            b"compiler" => sync_println!("{}", crate::misc::compiler_info()),
+            b"export_net" => self.engine.save_network(tokens.next()),
+            b"--help" | b"help" | b"--license" | b"license" => sync_println!(
+                "\nStockfish is a powerful chess engine for playing and analyzing.\
+                 \nIt is released as free software licensed under the GNU GPLv3 License.\
+                 \nStockfish is normally used with a graphical user interface (GUI) and implements\
+                 \nthe Universal Chess Interface (UCI) protocol to communicate with a GUI, an API, etc.\
+                 \nFor any further information, visit https://github.com/official-stockfish/Stockfish#readme\
+                 \nor read the corresponding README.md and Copying.txt files distributed along with this program.\n"
+            ),
             b"" => {}
             t if t[0] == b'#' => {}
             _ => {
-                let mut out = io::stdout().lock();
-                let _ = out.write_all(b"Unknown command: '");
-                let _ = out.write_all(cmd);
-                let _ = out.write_all(b"'. Type help for more information.\n");
+                let mut out = b"Unknown command: '".to_vec();
+                out.extend_from_slice(cmd);
+                out.extend_from_slice(b"'. Type help for more information.\n");
+                crate::io::write_out(&out);
             }
         }
         true
@@ -269,7 +344,7 @@ impl UciEngine {
         let name = String::from_utf8_lossy(&name).into_owned();
         let value = String::from_utf8_lossy(&value).into_owned();
         if let Some(info) = self.engine.setoption(&name, &value) {
-            println!("info string {info}");
+            print_info_string(&info);
         }
     }
 
@@ -371,9 +446,10 @@ impl UciEngine {
     }
 
     fn perft(&mut self, depth: Depth) -> u64 {
+        // (C++ does not wait for a search that runs: both would print)
         self.engine.wait_for_search_finished();
-        let stdout = io::stdout();
-        let mut out = io::BufWriter::new(stdout.lock());
+        self.engine.verify_network();
+        let mut out = io::BufWriter::new(crate::io::Out);
         let fen = self.engine.pos.fen();
         match perft_fen(fen.as_bytes(), depth, self.engine.chess960(), &mut out) {
             Ok(nodes) => {
@@ -436,7 +512,7 @@ impl UciEngine {
 
                     nodes += std::mem::take(&mut *nodes_searched.lock().unwrap());
                 } else {
-                    println!("info string eval is not ported");
+                    self.engine.trace_eval();
                 }
             } else if token == b"setoption" {
                 self.setoption(toks);
@@ -455,6 +531,179 @@ impl UciEngine {
             1000 * nodes / elapsed
         );
 
+        self.engine.restore_update_context(saved);
+    }
+
+    /// `speedtest [threads] [hash] [seconds]`: a timed run over the
+    /// positions of real games, with the clock of each move scaled so that
+    /// the whole takes about the time asked for; prints a report on stderr.
+    /// Nothing of a search is printed, nor the network verification.
+    fn benchmark<'a>(&mut self, tokens: impl Iterator<Item = &'a [u8]>) {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        // Probably not very important for a test this long, but include for
+        // completeness and sanity.
+        const NUM_WARMUP_POSITIONS: usize = 3;
+
+        let saved = self.engine.update_context();
+        self.engine.set_update_context(UpdateContext {
+            on_update_no_moves: Box::new(|_| {}),
+            on_update_full: Box::new(|_| {}),
+            on_iter: Box::new(|_| {}),
+            on_bestmove: Box::new(|_, _| {}),
+            on_start: Box::new(|| {}),
+        });
+        self.engine.verify_output = false;
+
+        let args: Vec<&[u8]> = tokens.collect();
+        let setup = crate::benchmark::setup_benchmark(
+            &args,
+            crate::numa::system_threads_nb() as i64,
+            crate::engine::max_threads(),
+            crate::engine::MAX_HASH_MB,
+        );
+
+        let num_go_commands = setup.commands.iter().filter(|c| c.starts_with("go ")).count();
+
+        // Set options once at the start.
+        for o in [
+            format!("name Threads value {}", setup.threads),
+            format!("name Hash value {}", setup.tt_size),
+            "name UCI_Chess960 value false".to_string(),
+        ] {
+            self.setoption(Tokens { rest: o.as_bytes() });
+        }
+
+        // Warmup
+        let mut cnt = 1;
+        for cmd in &setup.commands {
+            let mut toks = Tokens { rest: cmd.as_bytes() };
+            let token = toks.next().unwrap_or(b"");
+            if token == b"go" {
+                // One new line is produced by the search, so omit it here
+                eprint!("\rWarmup position {cnt}/{NUM_WARMUP_POSITIONS}");
+                cnt += 1;
+                let limits = self.parse_limits(toks);
+                self.engine.go(limits);
+                self.engine.wait_for_search_finished();
+            } else if token == b"position" {
+                self.position(toks);
+            } else if token == b"ucinewgame" {
+                self.engine.search_clear(); // search_clear may take a while
+            }
+            if cnt > NUM_WARMUP_POSITIONS {
+                break;
+            }
+        }
+
+        eprintln!();
+
+        let mut cnt = 1;
+        let mut num_hashfull_readings = 0;
+        const HASHFULL_AGES: [i32; 2] = [0, 999]; // Only normal hashfull and touched hash.
+        let mut total_hashfull = [0i32; 2];
+        let mut max_hashfull = [0i32; 2];
+
+        self.engine.search_clear(); // search_clear may take a while
+
+        #[derive(Default)]
+        struct Timing {
+            start: Option<Instant>,
+            total: Duration,
+            nodes: u64,
+            nodes_searched: u64,
+        }
+        let timing = Arc::new(Mutex::new(Timing::default()));
+        let (t1, t2, t3) = (timing.clone(), timing.clone(), timing.clone());
+        self.engine.set_update_context(UpdateContext {
+            on_update_no_moves: Box::new(|_| {}),
+            on_update_full: Box::new(move |i: &InfoFull| t1.lock().unwrap().nodes_searched = i.nodes),
+            on_iter: Box::new(|_| {}),
+            on_bestmove: Box::new(move |_, _| {
+                let mut t = t2.lock().unwrap();
+                if let Some(start) = t.start {
+                    t.total += start.elapsed();
+                }
+                t.nodes += t.nodes_searched;
+            }),
+            on_start: Box::new(move || {
+                let mut t = t3.lock().unwrap();
+                t.start = Some(Instant::now());
+                t.nodes_searched = 0;
+            }),
+        });
+
+        for cmd in &setup.commands {
+            let mut toks = Tokens { rest: cmd.as_bytes() };
+            let token = toks.next().unwrap_or(b"");
+            if token == b"go" {
+                // One new line is produced by the search, so omit it here
+                eprint!("\rPosition {cnt}/{num_go_commands}");
+                cnt += 1;
+                let limits = self.parse_limits(toks);
+                self.engine.go(limits);
+                self.engine.wait_for_search_finished();
+
+                num_hashfull_readings += 1;
+                for i in 0..2 {
+                    let hashfull = self.engine.tt().hashfull(HASHFULL_AGES[i]);
+                    max_hashfull[i] = max_hashfull[i].max(hashfull);
+                    total_hashfull[i] += hashfull;
+                }
+            } else if token == b"position" {
+                self.position(toks);
+            } else if token == b"ucinewgame" {
+                self.engine.search_clear(); // search_clear may take a while
+            }
+        }
+
+        let (total_time, nodes) = {
+            let t = timing.lock().unwrap();
+            (t.total, t.nodes)
+        };
+        // Ensure positivity to avoid a 'divide by zero'
+        let total_time_ms = (total_time.as_millis() as i64).max(1);
+
+        eprintln!();
+
+        let mut thread_binding = self.engine.thread_binding_information_as_string();
+        if thread_binding.is_empty() {
+            thread_binding = "none".to_string();
+        }
+
+        eprintln!(
+            "===========================\
+             \nVersion                    : {}{}\
+             Large pages                : no\
+             \nUser invocation            : speedtest {}\
+             \nFilled invocation          : speedtest {}\
+             \nAvailable processors       : {}\
+             \nThread count               : {}\
+             \nThread binding             : {thread_binding}\
+             \nTT size [MiB]              : {}\
+             \nHash max, avg [per mille]  : \
+             \n    single search          : {}, {}\
+             \n    single game            : {}, {}\
+             \nTotal nodes searched       : {nodes}\
+             \nTotal search time [s]      : {}\
+             \nNodes/second               : {}",
+            crate::misc::engine_version_info(),
+            crate::misc::compiler_info(),
+            setup.original_invocation,
+            setup.filled_invocation,
+            self.engine.numa.config,
+            setup.threads,
+            setup.tt_size,
+            max_hashfull[0],
+            total_hashfull[0] / num_hashfull_readings.max(1),
+            max_hashfull[1],
+            total_hashfull[1] / num_hashfull_readings.max(1),
+            format_g6(total_time_ms as f64 / 1000.0),
+            1000 * nodes / total_time_ms as u64
+        );
+
+        self.engine.verify_output = true;
         self.engine.restore_update_context(saved);
     }
 
@@ -524,12 +773,11 @@ impl UciEngine {
         let Some((_, Ok(file))) = file else {
             dumper.dump(self.engine.pos.fen().as_bytes(), chess960, &mut buf);
             buf.push(b'\n');
-            let _ = io::stdout().lock().write_all(&buf);
+            crate::io::write_out(&buf);
             return;
         };
 
-        let stdout = io::stdout();
-        let mut out = io::BufWriter::with_capacity(1 << 16, stdout.lock());
+        let mut out = io::BufWriter::with_capacity(1 << 16, crate::io::Out);
         let mut reader = BufReader::new(file);
         let mut line = Vec::new();
         loop {
@@ -567,9 +815,7 @@ impl UciEngine {
             let network = self.engine.verify_network();
             let mut dumper = LineDumper::new(&network);
             dumper.dump(rest, chess960, &mut buf);
-            let mut out = io::stdout().lock();
-            let _ = out.write_all(&buf);
-            let _ = out.flush();
+            crate::io::write_out(&buf);
             return;
         }
 
@@ -581,8 +827,7 @@ impl UciEngine {
 
         let network = self.engine.verify_network();
         let mut dumper = LineDumper::new(&network);
-        let stdout = io::stdout();
-        let mut out = io::BufWriter::with_capacity(1 << 16, stdout.lock());
+        let mut out = io::BufWriter::with_capacity(1 << 16, crate::io::Out);
         let mut reader = BufReader::new(file);
         let mut line = Vec::new();
         let mut read_error = false;
@@ -707,8 +952,51 @@ pub fn format_score(s: &Score) -> String {
     }
 }
 
+/// `getline()` through C++'s logging `Tie`: the bytes of a line are logged
+/// as they are consumed, those already available before the rest arrives
+/// (a partial line is in the log before what the engine prints while it
+/// waits for the rest), the new line included. Returns the bytes read, 0 at
+/// the end of the input.
+fn read_line_logged(input: &mut impl BufRead, line: &mut Vec<u8>) -> usize {
+    let mut n = 0;
+    loop {
+        let (done, used) = match input.fill_buf() {
+            Ok([]) | Err(_) => return n,
+            Ok(buf) => {
+                let (done, used) = match buf.iter().position(|&c| c == b'\n') {
+                    Some(i) => (true, i + 1),
+                    None => (false, buf.len()),
+                };
+                crate::io::log_input(&buf[..used]);
+                line.extend_from_slice(&buf[..used]);
+                (done, used)
+            }
+        };
+        input.consume(used);
+        n += used;
+        if done {
+            return n;
+        }
+    }
+}
+
+/// `print_info_string()`: each line that is not blank as an `info string`.
+pub fn print_info_string(s: &str) {
+    let mut out = String::new();
+    for line in s.split('\n') {
+        if !line.bytes().all(is_c_space) {
+            out += "info string ";
+            out += line;
+            out.push('\n');
+        }
+    }
+    if !out.is_empty() {
+        crate::io::write_out(out.as_bytes());
+    }
+}
+
 pub fn on_update_no_moves(info: &InfoShort) {
-    println!("info depth {} score {}", info.depth, format_score(&info.score));
+    sync_println!("info depth {} score {}", info.depth, format_score(&info.score));
 }
 
 pub fn on_update_full(info: &InfoFull) {
@@ -736,18 +1024,18 @@ pub fn on_update_full(info: &InfoFull) {
         info.nodes, info.nps, info.hashfull, info.tb_hits, info.time_ms, info.pv
     );
 
-    println!("{s}");
+    sync_println!("{s}");
 }
 
 pub fn on_iter(info: &InfoIteration) {
-    println!("info depth {} currmove {} currmovenumber {}", info.depth, info.currmove, info.currmovenumber);
+    sync_println!("info depth {} currmove {} currmovenumber {}", info.depth, info.currmove, info.currmovenumber);
 }
 
 pub fn on_bestmove(bestmove: &str, ponder: &str) {
     if ponder.is_empty() {
-        println!("bestmove {bestmove}");
+        sync_println!("bestmove {bestmove}");
     } else {
-        println!("bestmove {bestmove} ponder {ponder}");
+        sync_println!("bestmove {bestmove} ponder {ponder}");
     }
 }
 
