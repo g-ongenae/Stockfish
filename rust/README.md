@@ -517,7 +517,7 @@ below.
 
 Four floating-point expressions of this commit reach the search or the
 output besides time management's (see "Time management", "Floating
-point") and skill levels' (out of scope):
+point") and skill levels' (see "The UCI surface", "Skill levels"):
 
 - the reduction table, `int(2872 / 128.0 * std::log(i))`: a constant table in
   the port (`REDUCTIONS`), which a unit test recomputes from the formula.
@@ -536,7 +536,7 @@ point") and skill levels' (out of scope):
   so any `exp` accurate to about 1e-9 (glibc's, musl's, x87's) gives C++'s
   result; a unit test checks the margin on each target, and the `wdl` field
   is compared with the reference binary below;
-- `Skill` (strength limit): ported, out of scope, checked by nothing.
+- `Skill` (strength limit): `F64` since layer 10, see "The UCI surface".
 
 ### What the gates do not see, and what checks it
 
@@ -579,7 +579,7 @@ both tracing binaries with that size), and is fixed.
 
 Still checked by nothing but reading against C++: `max_ply` in search and
 qsearch, the depth cap, the `forgottenMate` rollback and the depth-1 loss
-label, the `-VALUE_INFINITE` output fallback, skill levels,
+label, the `-VALUE_INFINITE` output fallback,
 `syzygy_extend_pv()` without tables. (Several threads: see "Threads".
 Pondering, `go infinite` and `nodestime` are compared since layer
 8: see "Time management".)
@@ -666,13 +666,8 @@ work should go, in order of evidence:
 
 - **Threads**: see "Threads", "For the next layers".
 - **Time management**: see "Time management", "For the next layers".
-- **The remaining UCI options.** `NumaPolicy`, `Debug Log File`,
-  `SyzygyPath` and the other Syzygy options are accepted and ignored (a
-  `SyzygyPath` prints an `info string`); `eval`, `export_net`, `compiler`
-  and `license` are not ported (`flip` is, with layer 9). MultiPV, `searchmoves`, `go mate`,
-  `UCI_ShowWDL` and other hash sizes are compared with the reference (see
-  above), and since layer 8 pondering, `go infinite` and `nodestime`; skill
-  levels and `UCI_LimitStrength`/`UCI_Elo` are ported and unchecked.
+- **The remaining UCI options**: done in layer 10, see "The UCI surface"
+  and INVENTORY.md.
 
 ## Time management
 
@@ -980,28 +975,27 @@ changes: every gate of the earlier layers passes unchanged.
   a new table then leaves as it is: the same contents, slower for a large
   hash with many threads.
 - **`Threads` has the bounds of C++**, 1 to `max(1024, 4 * cores)`, on every
-  target (C++ gives 32-bit builds the same bounds). The cores are
-  `available_parallelism()` (the CPUs the process may use) where C++ takes
-  `hardware_concurrency()` (the CPUs online): they differ only past 256
-  CPUs, or when the affinity is restricted on such a machine.
+  target (C++ gives 32-bit builds the same bounds). The cores are, as in
+  C++'s `hardware_concurrency()`, the CPUs online (since layer 10; before,
+  `available_parallelism()`, the CPUs the process may use).
 - **The output around a search**: `setoption name Threads` prints `info
   string Using N threads` (`Using 1 thread`), as C++ does through its
-  option's `on_change`; `go` prints the same line, where C++ prints it after
-  `info string Available processors: ...` (NUMA, not printed by the port).
+  option's `on_change`; `go` prints the same line, after `info string
+  Available processors: ...` (since layer 10).
   `Engine::setoption()` returns the line and the UCI loop prints it, as
   C++'s info listener does.
 - **A job that panics aborts the process** (debug builds unwind): a thread
   that died with `searching` set would leave whoever waits for it waiting
   forever; aborting makes the failure visible.
-- **NUMA: one node.** `NumaPolicy` is accepted and ignored. The port behaves
-  as C++ on a machine with one NUMA node, or with `NumaPolicy none`: no
+- **NUMA: one node.** Since layer 10 `NumaPolicy` is parsed and prints what
+  C++ prints (see "The UCI surface"), but nothing is bound or replicated.
+  The port behaves as C++ on a machine with one NUMA node, or with
+  `NumaPolicy none`: no
   thread is bound to a node, there is one network (C++ replicates it per
   node, `LazyNumaReplicatedSystemWide`), one set of shared histories for all
   threads (C++ has one per node, sized by the threads of that node), the
-  hash is cleared in thread order (C++ orders the threads by node), and
-  neither `info string Available processors: ...` nor the per-node binding
-  information is printed, nor `NumaPolicy`'s error message for an invalid
-  value. A later layer adding NUMA would give `ThreadPool::set()` a map of
+  hash is cleared in thread order (C++ orders the threads by node). A later
+  layer adding NUMA would give `ThreadPool::set()` a map of
   shared histories by node (C++'s `sharedHistories`), each worker its node's
   (`Worker::new` already takes `numa_thread_idx` and `numa_total`), and the
   network an `Arc` per node.

@@ -42,6 +42,13 @@ impl NetworkArchitecture {
         (!stream.fail).then_some(NetworkArchitecture { fc_0, fc_1, fc_2 })
     }
 
+    /// `write_parameters()`: the activations have no parameters.
+    pub fn write_parameters<W: std::io::Write>(&self, stream: &mut W) -> std::io::Result<()> {
+        self.fc_0.write_parameters(stream)?;
+        self.fc_1.write_parameters(stream)?;
+        self.fc_2.write_parameters(stream)
+    }
+
     pub fn propagate(&self, transformed_features: &[u8; TRANSFORMED_FEATURE_DIMENSIONS]) -> i32 {
         let mut fc_0_out = [0i32; FC_0_OUTPUTS];
         let mut concat = [0u8; ceil_to_multiple(FC_2_INPUTS, 32)];

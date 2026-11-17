@@ -121,6 +121,46 @@ impl Network {
         Some(Network { feature_transformer, network, layer_stack_fallback, layer_stack_index, description })
     }
 
+    /// `save()` to a stream (`write_parameters()`): the header with the
+    /// description, the table of the layer stacks, the feature transformer
+    /// and each stored layer stack, each part after its hash. Gives back the
+    /// bytes of the file the network was read from.
+    pub fn save<W: std::io::Write>(&self, stream: &mut W) -> std::io::Result<()> {
+        // write_header()
+        for v in [VERSION, HASH, self.description.len() as u32] {
+            stream.write_all(&v.to_le_bytes())?;
+        }
+        stream.write_all(&self.description)?;
+        for v in [LAYER_STACK_TABLE_HASH, RAW_LAYER_STACKS as u32, self.network.len() as u32] {
+            stream.write_all(&v.to_le_bytes())?;
+        }
+        let fallback: Vec<u8> = self.layer_stack_fallback.iter().flat_map(|f| f.to_le_bytes()).collect();
+        stream.write_all(&fallback)?;
+        stream.write_all(&feature_transformer::get_hash_value().to_le_bytes())?;
+        self.feature_transformer.write_parameters(stream)?;
+        for stack in &self.network {
+            stream.write_all(&architecture::get_hash_value().to_le_bytes())?;
+            stack.write_parameters(stream)?;
+        }
+        Ok(())
+    }
+
+    /// `trace_evaluate()`: the output of every stored layer stack for the
+    /// position (from the point of view of the side to move), and the stack
+    /// used, as `eval` prints them.
+    pub fn trace_evaluate(
+        &self,
+        pos: &Position,
+        accumulator_stack: &mut AccumulatorStack,
+        cache: &mut AccumulatorCaches,
+    ) -> (Vec<Value>, usize) {
+        let mut transformed_features = [0u8; BUFFER_SIZE];
+        let bucket = self.layer_stack(pos);
+        self.feature_transformer.transform(pos, accumulator_stack, cache, &mut transformed_features);
+        let positional = self.network.iter().map(|stack| stack.propagate(&transformed_features) / OUTPUT_SCALE).collect();
+        (positional, bucket)
+    }
+
     /// The layer stack used for a position: by the number of pieces, the
     /// queens, the layout of the pawns and the number of officers.
     pub fn layer_stack(&self, pos: &Position) -> usize {

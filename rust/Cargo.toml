@@ -32,6 +32,10 @@ counter32 = []
 # searching as thread k with the C++ engine patched alike
 # (bench/thread_idx_offset.patch).
 thread_idx_offset = []
+# Seed the generator of the skill level with the environment variable
+# SF_SKILL_SEED, to compare searches with a skill level with the C++ engine
+# patched alike (bench/skill_seed.patch).
+skill_seed = []
 
 [profile.release]
 opt-level = 3

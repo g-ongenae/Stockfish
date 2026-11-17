@@ -291,8 +291,7 @@ impl SearchTracer {
         if self.out && self.count < self.window_to {
             let indexed = format!("{} {}", self.count, self.line);
             if self.count >= self.window_from {
-                let stdout = std::io::stdout();
-                let mut o = stdout.lock();
+                let mut o = Vec::new();
                 if self.count == self.window_from {
                     for f in &self.frames {
                         for s in [&f.entry, &f.mv, &f.call] {
@@ -303,6 +302,7 @@ impl SearchTracer {
                     }
                 }
                 let _ = writeln!(o, "{indexed}");
+                crate::io::write_out(&o);
             }
             if is_move {
                 if let Some(f) = self.frames.last_mut() {

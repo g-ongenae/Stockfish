@@ -1220,6 +1220,28 @@ impl Position {
         self.set(f.as_bytes(), chess960)
     }
 
+    /// `operator<<` (the `d` command): the board, the FEN, the key and the
+    /// checkers. (C++ also probes the tablebases when they hold the
+    /// position; none are loaded here.)
+    pub fn visualize(&self) -> String {
+        const PIECE_TO_CHAR: &[u8; 15] = b" PNBRQK  pnbrqk";
+        let mut s = String::from("\n +---+---+---+---+---+---+---+---+\n");
+        for r in (RANK_1..=RANK_8).rev() {
+            for f in FILE_A..=FILE_H {
+                s += " | ";
+                s.push(PIECE_TO_CHAR[self.piece_on(make_square(f, r)) as usize] as char);
+            }
+            s += &format!(" | {}\n +---+---+---+---+---+---+---+---+\n", 1 + r);
+        }
+        s += &format!("   a   b   c   d   e   f   g   h\n\nFen: {}\nKey: {:016X}\nCheckers: ", self.fen(), self.key());
+        let mut b = self.checkers();
+        while b != 0 {
+            s += &square_to_string(crate::bitboard::pop_lsb(&mut b));
+            s.push(' ');
+        }
+        s
+    }
+
     pub fn fen(&self) -> String {
         let mut s = String::with_capacity(96);
 

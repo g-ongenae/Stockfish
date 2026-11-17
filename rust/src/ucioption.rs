@@ -142,7 +142,7 @@ impl OptionsMap {
                 }
             }
             None => {
-                println!("No such option: {name}");
+                crate::sync_println!("No such option: {name}");
                 None
             }
         }

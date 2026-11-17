@@ -40,6 +40,15 @@ def get_path():
     return os.path.abspath(os.path.join(CWD, args.stockfish_path))
 
 
+def expect_cli_output(stockfish, *needles):
+    # The command was understood (an engine prints 'Unknown command' and
+    # still exits with 0 otherwise), and printed what it should
+    output = stockfish.get_output()
+    assert not any("Unknown command" in line for line in output), output
+    for needle in needles:
+        assert any(needle in line for line in output), f"no '{needle}' in {output}"
+
+
 def postfix_check(output):
     if args.sanitizer_undefined:
         for idx, line in enumerate(output):
@@ -91,6 +100,7 @@ class TestCLI(metaclass=OrderedClassMembers):
     def test_eval(self):
         self.stockfish = Stockfish("eval".split(" "), True)
         assert self.stockfish.process.returncode == 0
+        expect_cli_output(self.stockfish, "NNUE network contributions", "<-- this bucket is used", "Final evaluation")
 
     def test_go_nodes_1000(self):
         self.stockfish = Stockfish("go nodes 1000".split(" "), True)
@@ -158,14 +168,17 @@ class TestCLI(metaclass=OrderedClassMembers):
     def test_d(self):
         self.stockfish = Stockfish("d".split(" "), True)
         assert self.stockfish.process.returncode == 0
+        expect_cli_output(self.stockfish, " | r | n | b | q | k | b | n | r | 8", "Fen: ", "Key: ", "Checkers:")
 
     def test_compiler(self):
         self.stockfish = Stockfish("compiler".split(" "), True)
         assert self.stockfish.process.returncode == 0
+        expect_cli_output(self.stockfish, "Compiled by", "Compilation architecture", "Compilation settings")
 
     def test_license(self):
         self.stockfish = Stockfish("license".split(" "), True)
         assert self.stockfish.process.returncode == 0
+        expect_cli_output(self.stockfish, "GNU GPLv3 License")
 
     def test_uci(self):
         self.stockfish = Stockfish("uci".split(" "), True)
@@ -177,6 +190,8 @@ class TestCLI(metaclass=OrderedClassMembers):
             f"export_net {os.path.join(current_path, 'verify.nnue')}".split(" "), True
         )
         assert self.stockfish.process.returncode == 0
+        expect_cli_output(self.stockfish, "Network saved successfully to")
+        assert os.path.getsize(os.path.join(current_path, "verify.nnue")) > 0
 
     # verify the generated net equals the base net
 

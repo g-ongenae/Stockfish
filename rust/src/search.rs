@@ -388,10 +388,13 @@ pub struct UpdateContext {
     pub on_start: Box<dyn Fn() + Send + Sync>,
 }
 
-/// `Skill`: the strength limit. Ported but not checked against C++ (the
-/// trace fixes `Skill Level` to 20, which disables it).
+/// `Skill`: the strength limit. Its doubles are `F64`, those of x86-64 on
+/// every target: the level of an Elo is not an integer, and the i586
+/// targets would compute the cubic and the push of `pick_best` in extended
+/// precision. Checked against C++ by `examples/surface_check.rs` and, with
+/// the seed fixed, whole searches (README.md, "Skill levels").
 pub struct Skill {
-    pub level: f64,
+    pub level: F64,
     pub best: Move,
 }
 
@@ -401,20 +404,20 @@ impl Skill {
 
     pub fn new(skill_level: i32, uci_elo: i32) -> Skill {
         let level = if uci_elo != 0 {
-            let e = (uci_elo - Self::LOWEST_ELO) as f64 / (Self::HIGHEST_ELO - Self::LOWEST_ELO) as f64;
-            (((37.2473 * e - 40.8525) * e + 22.2943) * e - 0.311438).clamp(0.0, 19.0)
+            let e = F64::from_i32(uci_elo - Self::LOWEST_ELO) / F64::from_i32(Self::HIGHEST_ELO - Self::LOWEST_ELO);
+            crate::fp::clamp((((37.2473 * e - 40.8525) * e + 22.2943) * e) - 0.311438, 0.0, 19.0)
         } else {
-            skill_level as f64
+            F64::from_i32(skill_level)
         };
         Skill { level, best: Move::none() }
     }
 
     pub fn enabled(&self) -> bool {
-        self.level < 20.0
+        self.level.0 < 20.0
     }
 
     pub fn time_to_pick(&self, depth: Depth) -> bool {
-        depth == 1 + self.level as i32
+        depth == 1 + self.level.to_i32()
     }
 
     /// When playing with strength handicap, choose the best move among a set
@@ -428,7 +431,8 @@ impl Skill {
         }
         let delta = (top_score - min_score).min(PAWN_VALUE);
         let mut max_score = -VALUE_INFINITE;
-        let weakness = 120.0 - 2.0 * self.level;
+        let weakness = F64(120.0) - 2.0 * self.level;
+        let weakness_int = weakness.to_i32() as u32;
 
         // Choose best move. For each move score we add two terms dependent on
         // weakness. One is deterministic and bigger for weaker levels, and one
@@ -436,8 +440,10 @@ impl Skill {
         for rm in &root_moves[..multi_pv] {
             let r = rng.rand() as u32;
             // This is our magic formula
-            let push = ((weakness * (top_score - rm.score) as f64
-                + (delta as u32 * (r % weakness as i32 as u32)) as f64) as i32)
+            // (delta * the remainder: unsigned arithmetic, as in C++)
+            let push = (weakness * F64::from_i32(top_score - rm.score)
+                + F64::from_u64((delta as u32).wrapping_mul(r % weakness_int) as u64))
+            .to_i32()
                 / 128;
 
             if rm.score + push >= max_score {
@@ -452,15 +458,25 @@ impl Skill {
 /// The generator of `Skill::pick_best`: C++ seeds a static `PRNG` with
 /// `now()` when it is first used, a time that differs from one run to the
 /// next. `now()` of the port counts from its first call, so the seed is taken
-/// from the system clock instead (milliseconds, as C++).
-fn skill_rng(rng: &mut Option<Prng>) -> &mut Prng {
-    rng.get_or_insert_with(|| {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(1);
-        Prng::new(ms | 1)
-    })
+/// from the system clock instead (milliseconds, as C++). With the feature
+/// `skill_seed`, the value of the environment variable SF_SKILL_SEED if set,
+/// as the C++ engine patched with `bench/skill_seed.patch`.
+pub fn skill_rng(rng: &mut Option<Prng>) -> &mut Prng {
+    rng.get_or_insert_with(|| Prng::new(skill_seed()))
+}
+
+fn skill_seed() -> u64 {
+    #[cfg(feature = "skill_seed")]
+    if let Some(seed) = std::env::var("SF_SKILL_SEED").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+        if seed != 0 {
+            return seed;
+        }
+    }
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(1);
+    ms | 1
 }
 
 /// `SearchManager`: what the main thread keeps for itself.

@@ -48,3 +48,90 @@ pub fn scale_evaluation(nnue: Value, optimism: i32, pos: &Position) -> Value {
     // Guarantee that the evaluation does not hit the tablebase range
     v.clamp(VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1)
 }
+
+/// `UCIEngine::to_cp()` with the doubles of x86-64 on every target (`F64`):
+/// the values `eval` prints are outputs of single layer stacks, which can
+/// lie outside the range of a score, where the margins proven for the search
+/// output (`uci.rs`, `win_rate_params`) do not hold.
+pub fn to_cp_exact(v: Value, pos: &Position) -> i32 {
+    use crate::fp::F64;
+    let material = pos.count_both(PAWN)
+        + 3 * pos.count_both(KNIGHT)
+        + 3 * pos.count_both(BISHOP)
+        + 5 * pos.count_both(ROOK)
+        + 9 * pos.count_both(QUEEN);
+    let m = F64::from_i32(material.clamp(17, 78)) / 58.0;
+    const AS: [f64; 4] = [-142.72052667, 372.35176398, -340.71073572, 415.23490212];
+    let a = (((AS[0] * m + AS[1]) * m + AS[2]) * m) + AS[3];
+    // the quotient is a double: its rounding is exact on every target
+    (F64::from_i32(100 * v) / a).0.round() as i32
+}
+
+/// `0.01 * to_cp(v)` printed with two decimals: the double is within one
+/// unit in the last place of the exact hundredth, so its two decimals are
+/// those of the integer.
+fn pawns(cp: i32) -> String {
+    format!("{}.{:02}", cp.unsigned_abs() / 100, cp.unsigned_abs() % 100)
+}
+
+/// `NNUE::trace()` (`nnue_misc.cpp`): the output of each stored layer stack,
+/// in pawns, the one used marked.
+fn nnue_trace(pos: &Position, network: &Network, caches: &mut AccumulatorCaches) -> String {
+    let mut accumulators = AccumulatorStack::new();
+    accumulators.reset();
+    let (positional, correct_bucket) = network.trace_evaluate(pos, &mut accumulators, caches);
+
+    let mut s = format!(
+        "NNUE network contributions (Normalized, {}\n",
+        if pos.side_to_move() == WHITE { "White to move)" } else { "Black to move)" }
+    );
+    s += "+------------+------------+\n|   Bucket   | Evaluation |\n+------------+------------+\n";
+    for (bucket, &v) in positional.iter().enumerate() {
+        // format_cp_aligned_dot(): the sign of the value, then the pawns
+        // right-aligned in 6 characters
+        let sign = if v < 0 {
+            '-'
+        } else if v > 0 {
+            '+'
+        } else {
+            ' '
+        };
+        s += &format!("|  {bucket:<10}|  {sign}{:>6}   |", pawns(to_cp_exact(v, pos)));
+        if bucket == correct_bucket {
+            s += " <-- this bucket is used";
+        }
+        s.push('\n');
+    }
+    s += "+------------+------------+\n";
+    s
+}
+
+/// `Eval::trace()`: the table of the layer stacks, the output of the
+/// network and the final evaluation, from white's point of view.
+pub fn trace(pos: &Position, network: &Network) -> String {
+    if pos.checkers() != 0 {
+        return "Final evaluation: none (in check)".to_string();
+    }
+
+    let mut accumulators = AccumulatorStack::new();
+    accumulators.reset();
+    let mut caches = AccumulatorCaches::new(network);
+
+    let mut s = format!("\n{}\n", nnue_trace(pos, network, &mut caches));
+
+    let mut nnue = network.evaluate(pos, &mut accumulators, &mut caches);
+    let mut s_v = scale_evaluation(nnue, VALUE_ZERO, pos); // requires stm perspective
+
+    // showpos: "+0" for zero
+    s += &format!("NNUE evaluation          {nnue:+} (side to move, internal units)\n");
+
+    if pos.side_to_move() != WHITE {
+        nnue = -nnue;
+        s_v = -s_v;
+    }
+
+    let signed = |cp: i32| format!("{}{}", if cp < 0 { '-' } else { '+' }, pawns(cp));
+    s += &format!("NNUE evaluation        {} (white side)\n", signed(to_cp_exact(nnue, pos)));
+    s += &format!("Final evaluation      {} (white side) [with scaled NNUE, ...]\n", signed(to_cp_exact(s_v, pos)));
+    s
+}
