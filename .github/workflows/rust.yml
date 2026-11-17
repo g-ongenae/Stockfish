@@ -230,6 +230,8 @@ jobs:
       - name: Commands outside a search, against the C++ engine
         timeout-minutes: 30
         run: |
+          # each case runs in an empty directory: the network next to the binary
+          ln -sf ../../../src/nn-18cd32e11a9c.nnue target/release/
           EXE=$PWD/target/release/stockfish REF=$PWD/../src/stockfish python3 bench/compare_commands.py
           REF=$PWD/../src/stockfish python3 bench/compare_commands.py --record commands-cpp.jsonl
           cmp commands-cpp.jsonl commands.expected.jsonl
