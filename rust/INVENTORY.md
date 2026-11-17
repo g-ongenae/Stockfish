@@ -251,6 +251,42 @@ that the 129 MiB would be file-backed and shared by every process running
 the same binary, which is what C++'s shared memory gives: a larger change to
 `nnue/`, without `unsafe`.
 
-## 6. Counts
+## 6. Counts, and what is left
 
-Filled at the end of the layer.
+After layer 10, of the 125 rows above: **93 gated** (a comparison with the
+C++ engine or its recorded output); **4 ported and checked by reading only**
+(the messages of a failed hash allocation and a failed thread creation, the
+directory of `argv[0]`, `DEFAULT_NNUE_DIRECTORY`); **9 that differ**, each
+said in its row (by design: the start-up line and `id name`, which name the
+port, `searchtrace` in the main binary; `SyzygyPath`'s message until the next
+layer; known: a malformed network file and the lazy initial load, names and
+values that are not UTF-8, the allocator's failure message, the processors
+outside Linux); **3 accepted without effect** (`SyzygyProbeDepth`,
+`Syzygy50MoveRule`, `SyzygyProbeLimit`, until the next layer); **16 not
+ported** (Syzygy and its messages; NUMA binding and replication; the
+embedded network; the network shared between processes; large pages;
+prefetching; the SIMD helpers, `tune`, `universal/`, the Makefile and
+`incbin`, which a Rust build has no use for).
+
+What is left for the port to be complete besides Syzygy (the next layer) and
+NUMA binding (out of scope):
+
+- **The embedded network**: a decision (section 5 has the cost): about a
+  day for `include_bytes!` and the load from it; a few days for the
+  zero-copy variant that shares the weights between processes.
+- **The network shared between processes, large pages**: `shm_open`/`mmap`
+  and `madvise` are operating-system interfaces the port does not use and
+  need `unsafe` (or a dependency); a few days each, mostly for the platforms
+  and their failures. The zero-copy embedded network would give the first
+  without either.
+- **Prefetching**: speed only, an `unsafe` intrinsic on this toolchain; with
+  the speed work.
+- **The processors outside Linux** (Windows processor groups, affinity):
+  the Windows API, `unsafe`; matters for `Available processors`, the
+  `Threads` maximum on very large machines and `speedtest`'s default.
+- **A malformed network file read into the loaded network**: reproducing
+  C++'s partly overwritten copy would mean reading in place into an existing
+  `Network` (the port allocates only the stored layer stacks); half a day,
+  for files that are networks of this architecture yet malformed.
+- **Windows**: done by reading (text mode, the executable's directory), no
+  Windows CI; a Windows job would be the check.
