@@ -95,9 +95,10 @@ def cases():
     add("unknown", ["foo", "  foo  bar ", "# comment", "", "   ", "searchtrace_not", "export_netx", "evalx"])
     # (perft does not wait for a search in C++: never one after a go)
     add("go-messages", ["go perft 2", "go depth 1", "position startpos moves e2e4", "go nodes 1000"])
-    add("perft-no-network", ["setoption name EvalFile value nosuch.nnue", "go perft 1"])
-    add("go-no-network", ["setoption name EvalFile value nosuch.nnue", "go depth 1"])
-    add("eval-no-network", ["setoption name EvalFile value nosuch.nnue", "eval"])
+    add("perft-no-network", ["setoption name EvalFile value nosuch.nnue", "go perft 1"], rc=True)
+    add("go-no-network", ["setoption name EvalFile value nosuch.nnue", "go depth 1"], rc=True)
+    add("eval-no-network", ["setoption name EvalFile value nosuch.nnue", "eval"], rc=True)
+    add("dump-no-network", ["setoption name EvalFile value nosuch.nnue", "dump"], rc=True)
     add("evalfile-back", ["setoption name EvalFile value nosuch.nnue", f"setoption name EvalFile value {NET}",
                           "eval", "setoption name EvalFile value <empty>", "go perft 1"])
     add("options", ["setoption name threads value 2", "setoption name Threads", "setoption",
@@ -146,6 +147,9 @@ def cases():
                           "setoption name Threads value 2", "go perft 1", "setoption name NumaPolicy value none",
                           "go perft 1", "setoption name NumaPolicy value system", "setoption name Threads value 1",
                           "eval"], native=True)
+    add("numa-spaces", ["setoption name NumaPolicy value 0, ,1", "setoption name NumaPolicy value  ,1",
+                        "setoption name NumaPolicy value 1 x,0", "setoption name NumaPolicy value +1",
+                        "setoption name NumaPolicy value +", "go perft 1"], native=True, rc=True)
     add("numa-default", ["go perft 1", "setoption name Threads value 4", "go perft 1"], native=True)
     return c
 
@@ -235,7 +239,8 @@ def run(exe, case, workdir, prefix=""):
             target = os.path.join(S, "oracle", NET)
         os.symlink(os.path.realpath(target), os.path.join(workdir, "other.nnue"))
     p = subprocess.run(cmd, input=stdin.encode(), capture_output=True, cwd=workdir, timeout=3600)
-    res = {"stdout": p.stdout.decode(errors="replace"), "stderr": p.stderr.decode(errors="replace"),
+    # (bytes that are not UTF-8 stay distinct: surrogateescape)
+    res = {"stdout": p.stdout.decode(errors="surrogateescape"), "stderr": p.stderr.decode(errors="surrogateescape"),
            "rc": p.returncode, "files": {}}
     for f in case.get("files", []):
         path = os.path.join(workdir, f)
@@ -243,7 +248,7 @@ def run(exe, case, workdir, prefix=""):
             res["files"][f] = None
         elif case.get("logs"):
             with open(path, "rb") as fh:
-                res["files"][f] = normalize(fh.read().decode(errors="replace"), True)
+                res["files"][f] = normalize(fh.read().decode(errors="surrogateescape"), True)
         else:
             h = hashlib.sha256()
             with open(path, "rb") as fh:
@@ -259,7 +264,11 @@ def compared(case, res, strict):
     shape = case.get("shape")
     parts = []
     if shape == "compiler":
-        parts.append(f"compiler shape ok: {bool(check_compiler(res['stdout']))}")
+        # a shape that is not C++'s fails whatever the other engine prints
+        if not check_compiler(res["stdout"]):
+            parts.append("compiler shape WRONG:\n" + res["stdout"] + "\n" + str(id(res)))
+        else:
+            parts.append("compiler shape ok")
     elif shape and shape.startswith("speedtest"):
         progress, report = speedtest_shape(res["stderr"])
         parts.append(normalize(res["stdout"], strict))

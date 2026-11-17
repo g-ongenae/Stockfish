@@ -50,10 +50,8 @@ fn main() {
     let sha = run("git", &["rev-parse", "HEAD"]).map(|s| s.chars().take(8).collect::<String>());
     // GIT_DATE: the date of the commit, else (as __DATE__) that of the build
     let date = run("git", &["show", "-s", "--date=format:%Y%m%d", "--format=%cd", "HEAD"]).unwrap_or_else(|| {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let secs =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         let (y, m, d) = civil_from_days(secs.div_euclid(86400));
         format!("{y:04}{m:02}{d:02}")
     });

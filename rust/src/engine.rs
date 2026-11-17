@@ -10,10 +10,10 @@ use crate::history::SharedHistories;
 use crate::nnue::network::EVAL_FILE_DEFAULT_NAME;
 use crate::nnue::Network;
 use crate::numa::NumaState;
-use crate::sync_println;
 use crate::position::{Position, PositionSetError};
 use crate::search::*;
 use crate::searchtrace::{self, json_string, parse_session, trim, SearchTraceWindow, SearchTracer};
+use crate::sync_println;
 use crate::thread::ThreadPool;
 use crate::timeman::now;
 use crate::tt::TranspositionTable;
@@ -347,23 +347,23 @@ impl Engine {
     /// by the next verify_network(). Never while a network is loaded, so
     /// never while a search runs.
     pub fn preload_network(&mut self) {
-        if self.network.is_none() {
-            self.load_network();
-        }
+        self.ensure_initial_network();
     }
 
-    /// The network for a search or a dump, loaded if needed, without the
-    /// messages of verify_network().
+    /// The network for a search or a dump, without the messages of
+    /// verify_network().
     pub fn network(&mut self) -> Option<Arc<Network>> {
-        self.load_network();
+        self.ensure_initial_network();
         self.network.as_ref().map(|(_, n)| n.clone())
     }
 
     /// `Engine::verify_network()`: unless the network of the `EvalFile`
     /// option is the one loaded, terminates as C++ does; otherwise announces
-    /// it, then the status of each replica, at every call, as C++ does.
+    /// it, then the status of each replica, at every call, as C++ does. It
+    /// loads nothing (`EvalFile` is loaded when set), but the default
+    /// network the first time, which C++ loads at start-up.
     pub fn verify_network(&mut self) -> Arc<Network> {
-        self.load_network();
+        self.ensure_initial_network();
         let path = self.eval_file();
         let name = String::from_utf8_lossy(&path).into_owned();
         match &self.network {
@@ -415,7 +415,9 @@ impl Engine {
                 "Failed to export a net. No network file is currently loaded. Please load a network file first."
             ),
             Some((current, _)) if file.is_none() && current.as_slice() != EVAL_FILE_DEFAULT_NAME.as_bytes() => {
-                sync_println!("Failed to export a net. A non-embedded net can only be saved if the filename is specified")
+                sync_println!(
+                    "Failed to export a net. A non-embedded net can only be saved if the filename is specified"
+                )
             }
             Some((_, net)) => {
                 let name = file.unwrap_or(EVAL_FILE_DEFAULT_NAME.as_bytes());
@@ -552,7 +554,8 @@ impl Engine {
 
             let mut commands = Vec::new();
             if let Some(error) = parse_session(&l, &mut commands) {
-                sync_println!("{{\"session\":{session},\"error\":{},\"input\":{}}}",
+                sync_println!(
+                    "{{\"session\":{session},\"error\":{},\"input\":{}}}",
                     json_string(error.as_bytes()),
                     json_string(&l)
                 );
@@ -567,7 +570,8 @@ impl Engine {
                 if !cmd.is_go {
                     let moves: Vec<&[u8]> = cmd.moves.iter().map(|m| m.as_slice()).collect();
                     if let Err(e) = self.set_position(&cmd.fen, &moves) {
-                        sync_println!("{{\"session\":{session},\"search\":{},\"error\":{},\"input\":{}}}",
+                        sync_println!(
+                            "{{\"session\":{session},\"search\":{},\"error\":{},\"input\":{}}}",
                             search + 1,
                             json_string(e.what()),
                             json_string(&cmd.text)
@@ -694,9 +698,13 @@ pub fn default_update_context() -> UpdateContext {
 }
 
 /// `CommandLine::get_binary_directory()`: the directory of `argv[0]`, `.`
-/// if it has none.
+/// if it has none; on Windows that of the executable
+/// (`GetModuleFileNameW`, which `current_exe()` calls), `argv[0]` if that
+/// fails.
 fn binary_directory(argv0: Option<std::ffi::OsString>) -> std::path::PathBuf {
-    let dir = argv0.map(std::path::PathBuf::from).and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();
+    let exe = if cfg!(windows) { std::env::current_exe().ok().map(|p| p.into_os_string()) } else { None };
+    let path = exe.or(argv0).map(std::path::PathBuf::from);
+    let dir = path.and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();
     if dir.as_os_str().is_empty() {
         std::path::PathBuf::from(".")
     } else {

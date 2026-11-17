@@ -47,6 +47,22 @@ fn logger() -> std::sync::MutexGuard<'static, Logger> {
 /// held across both, so that lines of several threads do not mix (C++'s
 /// `sync_cout`).
 pub fn write_out(bytes: &[u8]) {
+    // a C++ build on Windows writes stdout and the log in text mode: LF
+    // becomes CRLF
+    let translated;
+    let bytes = if cfg!(windows) {
+        let mut t = Vec::with_capacity(bytes.len() + 8);
+        for &c in bytes {
+            if c == b'\n' {
+                t.push(b'\r');
+            }
+            t.push(c);
+        }
+        translated = t;
+        &translated[..]
+    } else {
+        bytes
+    };
     let mut log = logger();
     let mut out = io::stdout().lock();
     let _ = out.write_all(bytes);
@@ -56,7 +72,23 @@ pub fn write_out(bytes: &[u8]) {
 
 /// A line read by the UCI loop, its new line included if it had one.
 pub fn log_input(bytes: &[u8]) {
-    logger().log(bytes, b">> ");
+    if cfg!(windows) {
+        // the C++ input stream has already turned CRLF into LF; the log
+        // writes LF as CRLF
+        let mut t = Vec::with_capacity(bytes.len() + 1);
+        for (i, &c) in bytes.iter().enumerate() {
+            if c == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                continue;
+            }
+            if c == b'\n' {
+                t.push(b'\r');
+            }
+            t.push(c);
+        }
+        logger().log(&t, b">> ");
+    } else {
+        logger().log(bytes, b">> ");
+    }
 }
 
 /// `Logger::start()`: closes the log if one is open, then opens the file

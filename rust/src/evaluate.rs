@@ -89,12 +89,10 @@ fn nnue_trace(pos: &Position, network: &Network, caches: &mut AccumulatorCaches)
     for (bucket, &v) in positional.iter().enumerate() {
         // format_cp_aligned_dot(): the sign of the value, then the pawns
         // right-aligned in 6 characters
-        let sign = if v < 0 {
-            '-'
-        } else if v > 0 {
-            '+'
-        } else {
-            ' '
+        let sign = match v.cmp(&0) {
+            std::cmp::Ordering::Less => '-',
+            std::cmp::Ordering::Greater => '+',
+            std::cmp::Ordering::Equal => ' ',
         };
         s += &format!("|  {bucket:<10}|  {sign}{:>6}   |", pawns(to_cp_exact(v, pos)));
         if bucket == correct_bucket {

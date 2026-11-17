@@ -35,7 +35,8 @@ The gates named here, besides those of the earlier layers (README.md):
   built with the feature `skill_seed` and the patched C++ engine, both seeded
   by `SF_SKILL_SEED`;
 - **skill_stats**: `bench/skill_stats.py`, the unpatched engines, compared
-  statistically.
+  statistically: evidence rather than a gate, run by hand (it fails only for
+  p < 0.001), not in CI.
 
 ## 1. Source files of `src/`
 
@@ -68,7 +69,7 @@ The gates named here, besides those of the earlier layers (README.md):
 | `perft.h` | `perft.rs` | gated: `perft.sh`, `tests/perft.sh` positions | |
 | `position.{h,cpp}` | `position.rs` | gated; `operator<<` (`d`) partly: only `Fen` and `Key` | `operator<<`: gated (commands, `d`, `d-cli`) |
 | `score.{h,cpp}` | `score.rs` | gated (the trace, `compare`) | |
-| `search.{h,cpp}` | `search.rs` | gated (the trace, `compare`, clock sessions); `Skill` ungated; the Syzygy parts in their form without tables | `Skill`: gated (surface_check, seeded searches, skill_stats) |
+| `search.{h,cpp}` | `search.rs` | gated (the trace, `compare`, clock sessions); `Skill` ungated; the Syzygy parts in their form without tables | `Skill`: gated (surface_check, seeded searches); checked statistically (skill_stats, not in CI) |
 | `searchtrace.{h,cpp}` (the fork's) | `searchtrace.rs` | gated (`trace`, `trace-full`) | |
 | `shm.h`, `shm_unix.h` | none | not ported: the network shared between processes (section 5) | |
 | `syzygy/tbprobe.{h,cpp}` | none | not ported (next layer) | |
@@ -137,18 +138,18 @@ case-insensitive.
 | `Clear Hash` | button | gated (threads_check) | |
 | `Ponder` | check, false | gated (clock sessions, tm_check) | |
 | `MultiPV` | spin, 1, 1 to 256 | gated (`compare`) | |
-| `Skill Level` | spin, 20, 0 to 20 | ungated | gated (surface_check, seeded searches, skill_stats) |
+| `Skill Level` | spin, 20, 0 to 20 | ungated | gated (surface_check, seeded searches); checked statistically (skill_stats, not in CI) |
 | `Move Overhead` | spin, 10, 0 to 5000 | gated (tm_check, clock sessions) | |
 | `nodestime` | spin, 0, 0 to 10000 | gated (clock sessions) | |
 | `UCI_Chess960` | check, false | gated (every gate, Chess960 halves) | |
-| `UCI_LimitStrength` | check, false | ungated | gated (surface_check, seeded searches, skill_stats) |
-| `UCI_Elo` | spin, 1320, 1320 to 3190 | ungated | gated (surface_check, seeded searches, skill_stats) |
+| `UCI_LimitStrength` | check, false | ungated | gated (surface_check, seeded searches); checked statistically (skill_stats, not in CI) |
+| `UCI_Elo` | spin, 1320, 1320 to 3190 | ungated | gated (surface_check, seeded searches); checked statistically (skill_stats, not in CI) |
 | `UCI_ShowWDL` | check, false | gated (`compare`) | |
 | `SyzygyPath` | string, empty | differs: prints `info string Tablebases are not supported by this port` where C++ loads the tables and prints `info string Found N WDL and M DTZ tablebase files (up to K-man).` | next layer |
 | `SyzygyProbeDepth` | spin, 1, 1 to 100 | no effect (no tables) | next layer |
 | `Syzygy50MoveRule` | check, true | no effect (no tables) | next layer |
 | `SyzygyProbeLimit` | spin, 7, 0 to 7 | no effect (no tables) | next layer |
-| `EvalFile` | string, `nn-18cd32e11a9c.nnue` | gated (the default network); differs: C++ takes the default name for its embedded network and looks for any other file in the working directory, then the directory of `argv[0]` (then `DEFAULT_NNUE_DIRECTORY` if the build defines it); the port looks for every name, the default one included, in the working directory then the directory of the executable (`current_exe()`, which differs from `argv[0]`'s when the binary is run through `PATH` or a symbolic link) | the directory of `argv[0]`, and `DEFAULT_NNUE_DIRECTORY` from cargo's build environment, as C++; a network that cannot be read leaves the loaded one in place, as C++; gated (commands, `evalfile-back`, `export-other`, `export-failed-load`) |
+| `EvalFile` | string, `nn-18cd32e11a9c.nnue` | gated (the default network); differs: C++ takes the default name for its embedded network and looks for any other file in the working directory, then the directory of `argv[0]` (then `DEFAULT_NNUE_DIRECTORY` if the build defines it); the port looks for every name, the default one included, in the working directory then the directory of the executable (`current_exe()`, which differs from `argv[0]`'s when the binary is run through `PATH` or a symbolic link) | the directory of `argv[0]`, and `DEFAULT_NNUE_DIRECTORY` from cargo's build environment, as C++; a file that cannot be opened or is not a network leaves the loaded one in place, as C++ (gated: `evalfile-back`, `export-other`, `export-failed-load`); differs for a file that is a network of this architecture but malformed past its header (truncated, a trailing byte): C++ reads into a copy of the loaded network and keeps the copy with what it read before failing (its name unchanged), so a later `export_net`, or `EvalFile` back to the old name, uses those parameters, where the port keeps the old network intact; and the port loads the default network on first need (`isready`, `go`, `eval`, ...) where C++ loads it at start-up, so a default file that appears or changes in between is seen by the port only |
 
 **`NumaPolicy` in C++, measured on this machine (one node, CPUs 0-1).** The
 value is stored even when refused. `auto` and `system` compute the
@@ -157,7 +158,8 @@ grouped by NUMA node and L3 domain, bundles of up to 32 threads), `hardware`
 ignores the affinity, `none` puts every CPU in one node, and anything else is
 parsed as nodes separated by `:` of CPUs separated by `,` with `a-b` ranges
 (`0:1` makes two nodes even on one): refused if it gives no node, repeats a
-CPU, or holds a range of 2^20 CPUs or more, with `info string NumaPolicy:
+CPU (a range of more than 2^20 CPUs, or a component that is not a number,
+is skipped; white space alone is CPU 0, as `strtoull` reads it), with `info string NumaPolicy:
 invalid value '<v>', keeping previous config.` An accepted value prints
 `Available processors: <config>` and `Using N threads[ with NUMA node thread
 binding: <bound>/<cpus>:...]`. Threads are bound unless the stored value is
@@ -168,6 +170,23 @@ refused value** (stored as is), C++ binds and says so, even on one node. Each
 each network verification one `Network replica K: ...` line per node of a
 configuration that needs replication (custom, or more than one node),
 `No allocation.` for a node no thread uses yet.
+
+**In the port** (layer 10) the same values are accepted and refused with the
+same messages, the configuration of the machine being that of one node: the
+processors the process may use (Linux: `Cpus_allowed_list` of
+`/proc/self/status`), every processor online for `hardware`, 0 to N-1
+elsewhere. The port prints the binding C++ would make and one replica line
+per node C++ would replicate to (the replicas reset by a new configuration,
+a new network or `export_net`, as in C++). Where C++ would bind a thread to
+a node none of whose processors is online (`NumaPolicy 5` on this machine),
+`sched_setaffinity` fails and C++ exits with 1 without a message: so does the
+port, on Linux. Nothing is bound and nothing replicated: every thread runs
+where the system puts it, with one network and one set of shared histories
+(C++ has one per node), so with a configuration of several nodes the search
+is that of one node. C++ also splits a node into L3 domains (bundles of 32
+threads); on a machine where that makes several, or with several NUMA nodes,
+or outside Linux (section 5, Windows), the port prints one node where C++
+prints several or other processors.
 
 ## 4. What the engine prints besides the answer to a search
 
@@ -196,7 +215,9 @@ configuration that needs replication (custom, or more than one node),
 | `help`/`license` | the fixed text | not ported | gated |
 | `d`, `eval` | | section 2 | gated |
 | `Unable to open debug log file "<path>"` on stderr, exit 1 | | not printed | gated (commands, `log-bad*`) |
-| `Failed to allocate N MB for transposition table.` on stderr, exit 1 | | gated by reading (`tt.rs`) | |
+| `Failed to allocate <N>MB for transposition table.` on stderr, exit 1 | | gated by reading (`tt.rs`) | |
+| `Failed to free large page memory. Error code: 0x...`, `munmap failed: ...` on stderr, exit 1 | `memory.cpp`, when freeing large pages fails | not ported (no large pages) | |
+| `Failed to allocate <N> bytes.` on stderr | `memory.h`, a failed allocation (network, histories) | differs: the Rust allocator's `memory allocation of N bytes failed`, then abort | |
 | `Failed to create search thread` | C++ on a failed thread creation, exit 1 | gated by reading (`thread.rs` prints it and exits; this row said "panics" when first pushed, wrongly) | |
 | FENs printed (`d`, `bench`, `dump`) | | gated (`dump` `fen`) | |
 
@@ -211,8 +232,8 @@ configuration that needs replication (custom, or more than one node),
 | Prefetching | `__builtin_prefetch` of TT clusters and history entries | not ported: changes no result; the intrinsic is `unsafe` on this toolchain | speed work, later |
 | The directory of the binary (network search) | the parent of `argv[0]` (Windows: `GetModuleFileNameW`), `.` if none | differs: `current_exe()` | as C++ (gated by reading) |
 | `DEFAULT_NNUE_DIRECTORY` | a third directory for the network, fixed at build time (`-DDEFAULT_NNUE_DIRECTORY=...`) | not ported | read from cargo's build environment (gated by reading) |
-| Windows: UTF-8 console, wide `argv`, paths in UTF-8 then the ANSI code page | `set_console_utf8()`, `CommandLine`, `path_from_utf8()` | std's conversions (arguments are UTF-16 → UTF-8 lossily, paths from UTF-8); no Windows CI | |
-| `Debug Log File` | stdin and stdout teed to a file | no effect | gated (commands, `log*`) |
+| Windows: UTF-8 console, wide `argv`, paths in UTF-8 then the ANSI code page | `set_console_utf8()`, `CommandLine`, `path_from_utf8()` | std's conversions (arguments are UTF-16 → UTF-8 lossily, paths from UTF-8); no Windows CI | text mode as a C++ build: CRLF read as LF, LF written as CRLF to stdout and the log; the directory of the executable from `current_exe()` (`GetModuleFileNameW`); checked by reading only. Still differs: the processors (`hardware_concurrency()` counts every processor group, C++ reads the affinity and the topology through the Windows API; the port takes `available_parallelism()` and numbers 0 to N-1), so `Threads`' maximum on very large machines, `Available processors` and `speedtest`'s default thread count can differ; the same holds on other systems but Linux |
+| `Debug Log File` | stdin and stdout teed to a file | no effect | gated (commands, `log*`); input logged as it is consumed, a partial line before what is printed while the rest is awaited (compared by hand: timing-dependent) |
 | 32-bit targets | `Hash` up to 2048 | gated (emulated targets) | |
 | The thread stack | 8 MiB (`TH_STACK_SIZE`) | gated (deep searches, musl) | |
 

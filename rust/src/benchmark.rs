@@ -428,7 +428,12 @@ fn div_f32(a: f32, b: f32) -> f32 {
 /// the others fail too), clamped with a warning on stderr, and the commands:
 /// for each game a `ucinewgame`, then each position with a `go movetime` that
 /// gives the whole run the time asked for.
-pub fn setup_benchmark(args: &[&[u8]], hardware_concurrency: i64, max_threads: i64, max_hash_mb: i64) -> BenchmarkSetup {
+pub fn setup_benchmark(
+    args: &[&[u8]],
+    hardware_concurrency: i64,
+    max_threads: i64,
+    max_hash_mb: i64,
+) -> BenchmarkSetup {
     // TT_SIZE_PER_THREAD is chosen such that roughly half of the hash is used
     // all positions for the current sequence have been searched.
     const TT_SIZE_PER_THREAD: i64 = 128;

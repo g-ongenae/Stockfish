@@ -157,7 +157,8 @@ impl Network {
         let mut transformed_features = [0u8; BUFFER_SIZE];
         let bucket = self.layer_stack(pos);
         self.feature_transformer.transform(pos, accumulator_stack, cache, &mut transformed_features);
-        let positional = self.network.iter().map(|stack| stack.propagate(&transformed_features) / OUTPUT_SCALE).collect();
+        let positional =
+            self.network.iter().map(|stack| stack.propagate(&transformed_features) / OUTPUT_SCALE).collect();
         (positional, bucket)
     }
 

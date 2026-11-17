@@ -41,26 +41,36 @@ fn allowed_cpus() -> Option<Vec<usize>> {
     Some(indices_from_shortened_string(&l))
 }
 
-/// `str_to_size_t()`: a decimal number without sign, nothing after it but
-/// white space.
+/// `str_to_size_t()`: `strtoull` of the string, refused if it starts with
+/// '-', on overflow, or if the character where `strtoull` stopped is neither
+/// the end nor white space. As in C++: `strtoull` skips leading white space
+/// and takes a sign (" -5" wraps to 2^64 - 5); without digits it stops at
+/// the start, so " " is 0 and "+" is refused; "5 x" is 5.
 fn str_to_size_t(s: &str) -> Option<usize> {
-    if s.is_empty() || s.starts_with('-') {
+    let b = s.as_bytes();
+    if b.is_empty() || b[0] == b'-' {
         return None;
     }
-    // strtoull skips leading white space and takes a '+'
-    let t = s.trim_start_matches([' ', '\t', '\n', '\x0B', '\x0C', '\r']);
-    let t = t.strip_prefix('+').unwrap_or(t);
-    let digits = t.bytes().take_while(|c| c.is_ascii_digit()).count();
-    if digits == 0 {
-        return None;
+    let is_space = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r');
+    let mut i = b.iter().take_while(|&&c| is_space(c)).count();
+    let neg = i < b.len() && b[i] == b'-';
+    if i < b.len() && (b[i] == b'-' || b[i] == b'+') {
+        i += 1;
     }
-    let rest = &t[digits..];
-    if let Some(c) = rest.bytes().next() {
-        if !matches!(c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r') {
-            return None;
+    let digits = b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let (value, end) = if digits == 0 {
+        (0u64, 0) // no conversion: strtoull stops at the start
+    } else {
+        let mut v: u64 = 0;
+        for &c in &b[i..i + digits] {
+            v = v.checked_mul(10)?.checked_add((c - b'0') as u64)?; // ERANGE
         }
+        (if neg { v.wrapping_neg() } else { v }, i + digits)
+    };
+    if end < b.len() && !is_space(b[end]) {
+        return None;
     }
-    t[..digits].parse::<u64>().ok().and_then(|v| usize::try_from(v).ok())
+    usize::try_from(value).ok()
 }
 
 /// `split()` of `misc.h`: the pieces between the delimiters, the last one
@@ -206,7 +216,7 @@ impl NumaConfig {
     }
 
     /// `to_string()`: "0-15,128-143:16-31".
-    pub fn to_string(&self) -> String {
+    fn describe(&self) -> String {
         let mut s = String::new();
         for (i, cpus) in self.nodes.iter().enumerate() {
             if i > 0 {
@@ -275,6 +285,13 @@ impl NumaConfig {
     }
 }
 
+/// `NumaConfig::to_string()`.
+impl std::fmt::Display for NumaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.describe())
+    }
+}
+
 /// The NUMA state of the engine that its messages depend on: the
 /// configuration, the node C++ would bind each thread to (empty: none bound,
 /// `boundThreadToNumaNode`), and which replicas of the network C++ would
@@ -287,8 +304,11 @@ pub struct NumaState {
 
 impl NumaState {
     pub fn new() -> NumaState {
-        let mut s =
-            NumaState { config: NumaConfig::from_system(true), bound_thread_to_numa_node: Vec::new(), replicas: Vec::new() };
+        let mut s = NumaState {
+            config: NumaConfig::from_system(true),
+            bound_thread_to_numa_node: Vec::new(),
+            replicas: Vec::new(),
+        };
         s.prepare_replicas();
         s
     }
@@ -333,9 +353,7 @@ impl NumaState {
             return true;
         }
         let Some(online) = read_cpu_list("/sys/devices/system/cpu/online") else { return true };
-        self.bound_thread_to_numa_node
-            .iter()
-            .all(|&n| self.config.nodes[n].iter().any(|c| online.contains(c)))
+        self.bound_thread_to_numa_node.iter().all(|&n| self.config.nodes[n].iter().any(|c| online.contains(c)))
     }
 
     /// `prepare_replicate_from()`: the first replica only, on a new
@@ -431,6 +449,12 @@ mod tests {
             ("0,2-4,7:9", Some("0,2-4,7:9")),
             ("::0::", Some("0")),
             ("0-1-2", None),
+            // strtoull's view of white space and signs
+            ("0, ,1", None),
+            (" ,1", Some("0-1")),
+            ("1 x,0", Some("0-1")),
+            ("+1", Some("1")),
+            ("+", None),
         ] {
             assert_eq!(NumaConfig::from_string(v).map(|c| c.to_string()).as_deref(), expected, "{v}");
         }

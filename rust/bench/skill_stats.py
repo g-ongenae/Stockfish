@@ -57,6 +57,8 @@ def choices(exe, options, fen, depth, runs):
     p.stdin.write("quit\n")
     p.stdin.close()
     p.wait()
+    if sum(counts.values()) != runs:
+        sys.exit(f"{exe}: {sum(counts.values())} best moves for {runs} searches")
     return counts
 
 
@@ -141,7 +143,11 @@ def main():
             top = ", ".join(f"{m} {a[m]}/{b[m]}" for m, _ in (a + b).most_common(4))
             print(f"{name}, position {i + 1}: {len(a + b)} moves; port/C++ {top}; "
                   f"chi2 {stat:.1f}, {dof} dof, p {chi2_sf(stat, dof):.3f}", flush=True)
-    print(f"all cells: chi2 {total_stat:.1f}, {total_dof} dof, p {chi2_sf(total_stat, total_dof):.3f}")
+    p = chi2_sf(total_stat, total_dof)
+    print(f"all cells: chi2 {total_stat:.1f}, {total_dof} dof, p {p:.3f}")
+    # evidence rather than a gate: a disagreement this unlikely fails
+    if p < 0.001:
+        sys.exit("the distributions differ (p < 0.001)")
 
 
 if __name__ == "__main__":

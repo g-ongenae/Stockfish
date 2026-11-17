@@ -228,71 +228,6 @@ pub type BestMoveChanges = std::sync::atomic::AtomicU64;
 #[cfg(any(feature = "counter32", target_pointer_width = "32"))]
 pub type BestMoveChanges = std::sync::atomic::AtomicU32;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn counter_counts_across_the_32_bit_boundary() {
-        let c = RelaxedCounter::new();
-        c.set((1 << 32) - 3);
-        for i in 0..6u64 {
-            assert_eq!(c.get(), (1 << 32) - 3 + i);
-            assert_eq!(c.get_own(), c.get());
-            c.increment();
-        }
-        c.set(u64::MAX);
-        c.increment();
-        assert_eq!(c.get(), 0);
-    }
-
-    #[test]
-    fn counter_is_never_torn() {
-        // One writer crossing 32-bit boundaries, readers that must only see
-        // values that increase and that lie in the ranges written
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-        use std::sync::Arc;
-        const HALF: u64 = 500_000;
-        let c = Arc::new(RelaxedCounter::new());
-        let done = Arc::new(AtomicBool::new(false));
-        let started = Arc::new(AtomicUsize::new(0));
-        let readers: Vec<_> = (0..2)
-            .map(|_| {
-                let (c, done, started) = (c.clone(), done.clone(), started.clone());
-                std::thread::spawn(move || {
-                    let mut last = 0;
-                    let mut reads = 0u64;
-                    started.fetch_add(1, Relaxed);
-                    while !done.load(Relaxed) {
-                        let v = c.get();
-                        let near = (v + HALF) >> 32 << 32;
-                        assert!(v >= last, "decreasing: {v:#x} after {last:#x}");
-                        assert!(v == 0 || (v + HALF >= near && v <= near + HALF), "torn: {v:#x}");
-                        last = v;
-                        reads += 1;
-                    }
-                    reads
-                })
-            })
-            .collect();
-        // the readers read while the writer writes
-        while started.load(Relaxed) < 2 {
-            std::thread::yield_now();
-        }
-        for k in 1..=4u64 {
-            c.set((k << 32) - HALF);
-            for _ in 0..2 * HALF {
-                c.increment();
-            }
-            assert_eq!(c.get(), (k << 32) + HALF);
-        }
-        done.store(true, Relaxed);
-        for r in readers {
-            r.join().unwrap();
-        }
-    }
-}
-
 /// `engine_version_info()`: `Stockfish dev-YYYYMMDD-<sha8>` as the C++
 /// Makefile builds it from git (`-m` after the date when the tree differs
 /// from the commit, `nogit` without git; build.rs), followed by
@@ -359,3 +294,69 @@ pub fn compiler_info() -> String {
         env!("SF_TARGET")
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counter_counts_across_the_32_bit_boundary() {
+        let c = RelaxedCounter::new();
+        c.set((1 << 32) - 3);
+        for i in 0..6u64 {
+            assert_eq!(c.get(), (1 << 32) - 3 + i);
+            assert_eq!(c.get_own(), c.get());
+            c.increment();
+        }
+        c.set(u64::MAX);
+        c.increment();
+        assert_eq!(c.get(), 0);
+    }
+
+    #[test]
+    fn counter_is_never_torn() {
+        // One writer crossing 32-bit boundaries, readers that must only see
+        // values that increase and that lie in the ranges written
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+        use std::sync::Arc;
+        const HALF: u64 = 500_000;
+        let c = Arc::new(RelaxedCounter::new());
+        let done = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicUsize::new(0));
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let (c, done, started) = (c.clone(), done.clone(), started.clone());
+                std::thread::spawn(move || {
+                    let mut last = 0;
+                    let mut reads = 0u64;
+                    started.fetch_add(1, Relaxed);
+                    while !done.load(Relaxed) {
+                        let v = c.get();
+                        let near = (v + HALF) >> 32 << 32;
+                        assert!(v >= last, "decreasing: {v:#x} after {last:#x}");
+                        assert!(v == 0 || (v + HALF >= near && v <= near + HALF), "torn: {v:#x}");
+                        last = v;
+                        reads += 1;
+                    }
+                    reads
+                })
+            })
+            .collect();
+        // the readers read while the writer writes
+        while started.load(Relaxed) < 2 {
+            std::thread::yield_now();
+        }
+        for k in 1..=4u64 {
+            c.set((k << 32) - HALF);
+            for _ in 0..2 * HALF {
+                c.increment();
+            }
+            assert_eq!(c.get(), (k << 32) + HALF);
+        }
+        done.store(true, Relaxed);
+        for r in readers {
+            r.join().unwrap();
+        }
+    }
+}
+

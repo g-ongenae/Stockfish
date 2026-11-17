@@ -13,10 +13,10 @@ use crate::engine::Engine;
 use crate::movegen::MoveList;
 use crate::perft::perft_fen;
 use crate::position::{square_to_string, Position};
-use crate::sync_println;
 use crate::score::Score;
 use crate::search::{InfoFull, InfoIteration, InfoShort, LimitsType, UpdateContext};
 use crate::searchtrace::SearchTraceWindow;
+use crate::sync_println;
 use crate::timeman::now;
 use crate::types::*;
 
@@ -229,13 +229,15 @@ impl UciEngine {
         let mut line = Vec::new();
         loop {
             line.clear();
-            let n = stdin.lock().read_until(b'\n', &mut line).unwrap_or(0);
-            // what getline() reads, the new line included, goes to the log
-            crate::io::log_input(&line);
+            let n = read_line_logged(&mut stdin.lock(), &mut line);
             if n == 0 {
                 line.extend_from_slice(b"quit");
             } else if line.last() == Some(&b'\n') {
                 line.pop();
+                // a C++ build on Windows reads stdin in text mode: CRLF is LF
+                if cfg!(windows) && line.last() == Some(&b'\r') {
+                    line.pop();
+                }
             }
             if !self.execute(&line) {
                 break;
@@ -950,11 +952,39 @@ pub fn format_score(s: &Score) -> String {
     }
 }
 
+/// `getline()` through C++'s logging `Tie`: the bytes of a line are logged
+/// as they are consumed, those already available before the rest arrives
+/// (a partial line is in the log before what the engine prints while it
+/// waits for the rest), the new line included. Returns the bytes read, 0 at
+/// the end of the input.
+fn read_line_logged(input: &mut impl BufRead, line: &mut Vec<u8>) -> usize {
+    let mut n = 0;
+    loop {
+        let (done, used) = match input.fill_buf() {
+            Ok([]) | Err(_) => return n,
+            Ok(buf) => {
+                let (done, used) = match buf.iter().position(|&c| c == b'\n') {
+                    Some(i) => (true, i + 1),
+                    None => (false, buf.len()),
+                };
+                crate::io::log_input(&buf[..used]);
+                line.extend_from_slice(&buf[..used]);
+                (done, used)
+            }
+        };
+        input.consume(used);
+        n += used;
+        if done {
+            return n;
+        }
+    }
+}
+
 /// `print_info_string()`: each line that is not blank as an `info string`.
 pub fn print_info_string(s: &str) {
     let mut out = String::new();
     for line in s.split('\n') {
-        if !line.bytes().all(|c| is_c_space(c)) {
+        if !line.bytes().all(is_c_space) {
             out += "info string ";
             out += line;
             out.push('\n');
