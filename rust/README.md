@@ -24,13 +24,10 @@ it with the differential harness of `tests/differential/`.
 `dump` prints all 22 members of the C++ `dump`, and `dumpline` every member
 of the C++ `dumpline`.
 
-Not ported yet: Syzygy tablebases, `eval`, `export_net`, `compiler`,
-`license`, and NUMA (`NumaPolicy` is accepted, without effect: the port
-behaves as C++ on a machine with one node, see "Threads"). Ported but
-checked by nothing but reading: skill levels. Checked by direct comparisons
-with the reference rather than by the corpus: MultiPV above 1, `searchmoves`,
-`go mate`, `go infinite`, pondering, searches on a clock; see "The search",
-"What the gates do not see", and "Time management".
+What the port has of the C++ engine, file by file, command by command,
+option by option, message by message, and what it does not have and why, is
+in [INVENTORY.md](INVENTORY.md), built from the C++ sources and from running
+the reference binary and the port side by side.
 
 ## The network
 
