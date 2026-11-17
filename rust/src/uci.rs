@@ -692,7 +692,7 @@ impl UciEngine {
             crate::misc::compiler_info(),
             setup.original_invocation,
             setup.filled_invocation,
-            self.engine.numa.config.to_string(),
+            self.engine.numa.config,
             setup.threads,
             setup.tt_size,
             max_hashfull[0],

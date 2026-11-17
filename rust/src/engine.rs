@@ -198,7 +198,7 @@ impl Engine {
 
     /// `numa_config_information_as_string()`.
     pub fn numa_config_information_as_string(&self) -> String {
-        format!("Available processors: {}", self.numa.config.to_string())
+        format!("Available processors: {}", self.numa.config)
     }
 
     /// `thread_binding_information_as_string()`.
