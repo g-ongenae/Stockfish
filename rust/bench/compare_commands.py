@@ -24,8 +24,8 @@ machine (NumaPolicy).
 --record FILE writes, for each case that does not depend on the machine, a
 digest of what the reference printed; --expected FILE compares the port with
 such a file, for the targets that cannot run the reference (CI under
-emulation). In those two modes `Available processors` and the thread binding
-are normalized too.
+emulation). In those two modes `Available processors`, the thread binding and
+the maximum of `Hash` (which depends on the word size) are normalized too.
 """
 
 import argparse
@@ -166,6 +166,9 @@ def normalize(text, strict):
         if not strict:
             line = re.sub(r"Available processors: \S+", "Available processors: <cpus>", line)
             line = re.sub(r"binding: [\d/:]+", "binding: <binding>", line)
+            # Hash's maximum depends on the word size (2048 MiB on 32-bit)
+            line = re.sub(r"^(option name Hash type spin default 16 min 1 max )\d+$", r"\1<max>", line)
+            line = re.sub(r"(speedtest: hash \d+ is outside \[1, )\d+(\])", r"\1<max>\2", line)
         out.append(line)
     return "\n".join(out)
 
@@ -270,7 +273,7 @@ def compared(case, res, strict):
         else:
             parts.append("compiler shape ok")
     elif shape and shape.startswith("speedtest"):
-        progress, report = speedtest_shape(res["stderr"])
+        progress, report = speedtest_shape(normalize(res["stderr"], strict))
         parts.append(normalize(res["stdout"], strict))
         parts.append(json.dumps(progress))
         parts.append(json.dumps(report if shape == "speedtest" else []))
